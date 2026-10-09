@@ -17,7 +17,7 @@ void removeRuby(Spannable text);
 
 `RubySpan(RubySegment segment, RubyStyle style)` exposes `getReading()`, `getRubyText()`, `getTextSizeScale()`, `getVerticalOffsetEm()`, and `getInterlinearSpacingEm()`. Instrumentation obtains the range through `Spanned.getSpanStart(span)` and `Spanned.getSpanEnd(span)`; those offsets are the base text's UTF-16 range. `getReading()` contains the complete lexical reading and `getRubyText()` contains the actual annotation text. `RubySpan.computeRequiredWidth(TextPaint paint, CharSequence text, int start, int end, RubySegment segment, RubyStyle style)` returns the greater of the base and annotation widths. The caller supplies a paint with the applicable metric-span state and compares this width with the view's available line width before calling `apply`.
 
-`RubyStyle.getTextSizeScale()` controls annotation size relative to the paint used for the base text. `getVerticalOffsetEm()` shifts the annotation baseline upward by that fraction of the base paint size. `getInterlinearSpacingEm()` adds the gap above the base ascent. All values must be finite, the scale must be positive, and offset and spacing cannot be negative.
+`RubyStyle.getTextSizeScale()` controls annotation size relative to the paint used for the base text. `getVerticalOffsetEm()` shifts the annotation baseline upward by that fraction of the base paint size. `getInterlinearSpacingEm()` adds the gap above the base glyph's ink bounds. All values must be finite, the scale must be positive, and offset and spacing cannot be negative.
 
 ## TextView integration
 

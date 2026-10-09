@@ -74,6 +74,8 @@ Debug 构建默认启用检测日志，可使用以下命令关闭；Release 构
 
 Actions 保存 APK、JUnit XML/HTML、真实词典 TSV 语料报告、Lint、元数据与 SHA-256、模块界面 XML 和模拟器验证 JSON。这些产物支持重复执行与独立复查。
 
+版本 0.2.0 的 [Actions 37945088658](https://github.com/kongjianguan/FuriHook/actions/runs/37945088658) 已通过：8 个核心测试、真实词典语料及 API 28/36 各 14 个 E2E。Windows API 35 的 Vector API 102 环境通过相同 14 个 E2E 和 1 个真实 Hook 测试，APK 校验与设备证据见 [设备验证](docs/DEVICE_VALIDATION.md)。
+
 本机构建需要 JDK 17 和 Android SDK 36；通过 `ANDROID_HOME` 或未跟踪的 `local.properties` 指定 SDK。
 
 APK 标准输出路径：
@@ -120,4 +122,6 @@ pwsh -NoProfile -File scripts/test_windows_emulator.ps1
 
 ReplacementSpan 将覆盖范围作为原子排版单位，词内光标粒度会减少，完整词不能跨行拆分。布局变化会重新检查可用宽度与字号；其他字体属性或词内样式在注音完成后发生变化时，需要额外验证。排版行为和保护规则见 [Ruby 渲染](docs/RUBY_RENDERER.md)，后台生命周期见 [TextView 管线](docs/TEXTVIEW_PIPELINE.md)。
 
-API 核实依据及官方资料访问状态见 [API 核实记录](docs/API_VERIFICATION.md)。后续研发要求见 [第二阶段](docs/PHASE_TWO.md)。
+已经携带 FuriHook RubySpan 的文本保留现有注音。宿主直接修改同一 Spannable 的字符或复用带有旧注音的文本时，需要独立的变化监听与注音失效处理；当前管线以被 Hook 的文本设置调用建立分析任务。
+
+API 核实依据及官方资料访问状态见 [API 核实记录](docs/API_VERIFICATION.md)。后续研发要求见 [后续研发](docs/PHASE_TWO.md)。
