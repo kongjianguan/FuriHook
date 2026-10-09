@@ -35,7 +35,7 @@ Android 本地日语 Ruby 注音 LSPosed 模块，包名 `dev.furihook`，版本
 
 - `FuriHookModule` 使用 API 102 的无参数入口与生命周期回调。Android 29 及以上通过 `onPackageLoaded` 注册，Android 28 通过 `onPackageReady` 注册；注册器在同一进程只执行一次。
 - Hook 公开的 `setText(CharSequence, BufferType)` 和 `setText(char[], int, int)`。常见字符串、资源与 `setTextKeepState` 调用经过前一个入口，字符数组调用经过后一个入口。
-- 每次拦截执行原调用一次。公开二参入口对非输入文本选择 `BufferType.SPANNABLE`，随后只在当前文本对象添加 Ruby spans，原文字符保持原样。模块不调用第二次 `setText()`。
+- 每次拦截执行原调用一次。公开二参入口对非输入的汉字候选文本选择 `BufferType.SPANNABLE`，随后只在当前文本对象添加 Ruby spans，原文字符保持原样。回调的候选预检最多 2048 UTF-16 code unit；词典与分词全部在后台执行。模块不调用第二次 `setText()`。
 - 显式启用 `ExceptionMode.PROTECTIVE`，观测异常独立处理，宿主方法原有异常继续传播。
 - 输入框、Editable、keyListener、非空 inputType、密码、转换控件与 PrecomputedText 跳过注音。系统服务、系统应用、系统 UID、模块自身跳过注册。
 - `JapaneseDetector` 按 Unicode 18.0 已分配的 CJK Unified/Compatibility Ideographs 范围遍历 code point，支持补充平面、代理对和空值。包含 Han 字符只产生候选结果，语言状态为 `undetermined`。U+3007 等范围之外的表意字符不纳入该候选定义。

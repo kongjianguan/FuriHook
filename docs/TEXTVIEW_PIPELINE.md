@@ -6,7 +6,7 @@
 
 ## 调用与缓冲
 
-公开的 `setText(CharSequence, BufferType)` 使用 API 102 的 `Chain.proceed(Object[])` 执行一次原调用。对非输入控件的普通文本，原调用选择 `BufferType.SPANNABLE`。宿主可观察到 `getText()` 的具体类型变化，字符内容、原始样式及业务调用次数保持原样。Editable、预计算文本及转换控件保持宿主原有参数。
+公开的 `setText(CharSequence, BufferType)` 使用 API 102 的 `Chain.proceed(Object[])` 执行一次原调用。回调最多检查 2048 个 UTF-16 code unit，只有汉字候选选择 `BufferType.SPANNABLE`。宿主可观察到这些文本的 `getText()` 具体类型变化，字符内容、原始样式及业务调用次数保持原样。纯英文、纯假名、Editable、预计算文本及转换控件保持宿主原有参数。词典初始化与分词全部在后台执行。
 
 公开字符数组入口执行一次原调用。如果宿主缓冲已经是 Spannable，结果可以原地注音；产生不可变 CharWrapper 的路径保留文本检测。模块不使用隐藏 TextView 方法，不调用第二次 `setText()`。
 

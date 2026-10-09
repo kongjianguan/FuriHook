@@ -80,7 +80,8 @@ final class TextViewAnnotator {
                 && text != null && text.length() > 0
                 && !(text instanceof Editable) && !(text instanceof PrecomputedText)
                 && !SensitiveTextPolicy.shouldSkip(view)
-                && view.getTransformationMethod() == null && !renderer.hasRuby(text);
+                && view.getTransformationMethod() == null && !renderer.hasRuby(text)
+                && containsCandidateWithinSnapshot(text);
     }
 
     void observe(TextView view) {
@@ -108,11 +109,7 @@ final class TextViewAnnotator {
             if (protectedText(view) || text == null || text.length() == 0 || renderer.hasRuby(text)) {
                 return;
             }
-            int end = Math.min(text.length(), DetectionConfig.MAX_SNAPSHOT_UTF16);
-            if (end < text.length() && Character.isHighSurrogate(text.charAt(end - 1))
-                    && Character.isLowSurrogate(text.charAt(end))) {
-                end--;
-            }
+            int end = snapshotEnd(text);
             String snapshot = TextUtils.substring(text, 0, end);
             state.input = new Input(snapshot, text, state.generation, view.getId(),
                     view.getClass().getName());
@@ -137,6 +134,27 @@ final class TextViewAnnotator {
     private static boolean protectedText(TextView view) {
         return SensitiveTextPolicy.shouldSkip(view) || view.getTransformationMethod() != null
                 || view.getText() instanceof PrecomputedText;
+    }
+
+    private static int snapshotEnd(CharSequence text) {
+        int end = Math.min(text.length(), DetectionConfig.MAX_SNAPSHOT_UTF16);
+        if (end < text.length() && Character.isHighSurrogate(text.charAt(end - 1))
+                && Character.isLowSurrogate(text.charAt(end))) {
+            end--;
+        }
+        return end;
+    }
+
+    private static boolean containsCandidateWithinSnapshot(CharSequence text) {
+        int end = snapshotEnd(text);
+        for (int index = 0; index < end;) {
+            int codePoint = Character.codePointAt(text, index);
+            if (JapaneseDetector.isCjkIdeographCandidate(codePoint)) {
+                return true;
+            }
+            index += Character.charCount(codePoint);
+        }
+        return false;
     }
 
     private void submit(ViewState state) {
