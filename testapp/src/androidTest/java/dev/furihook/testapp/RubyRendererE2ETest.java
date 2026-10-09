@@ -9,6 +9,7 @@ import android.graphics.Paint;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.text.Selection;
 import android.text.Spannable;
@@ -43,6 +44,7 @@ import org.junit.runner.RunWith;
 
 import java.util.List;
 import java.util.Collections;
+import java.util.Locale;
 
 @RunWith(AndroidJUnit4.class)
 public final class RubyRendererE2ETest {
@@ -402,19 +404,13 @@ public final class RubyRendererE2ETest {
             int start = text.getSpanStart(ruby);
             int end = text.getSpanEnd(ruby);
             TextPaint basePaint = styledPaint(view, start, end);
-            Paint.FontMetricsInt baseMetrics = basePaint.getFontMetricsInt();
-            TextPaint rubyPaint = new TextPaint(basePaint);
-            rubyPaint.setTextSize(basePaint.getTextSize() * ruby.getTextSizeScale());
-            Paint.FontMetricsInt rubyMetrics = rubyPaint.getFontMetricsInt();
-            int baseline = view.getExtendedPaddingTop() + view.getLayout().getLineBaseline(0)
-                    + basePaint.baselineShift;
-            float rubyBaseline = baseline + basePaint.ascent()
-                    - basePaint.getTextSize() * ruby.getInterlinearSpacingEm()
-                    - basePaint.getTextSize() * ruby.getVerticalOffsetEm() - rubyMetrics.descent;
-            int baseTop = baseline + baseMetrics.top;
-            int baseBottom = baseline + baseMetrics.bottom;
-            int rubyTop = (int) Math.floor(rubyBaseline + rubyMetrics.top);
-            int rubyBottom = (int) Math.ceil(rubyBaseline + rubyMetrics.bottom);
+            String baseText = text.subSequence(start, end).toString();
+            Rect baseInkBounds = new Rect();
+            basePaint.getTextBounds(baseText, 0, baseText.length(), baseInkBounds);
+            int baseline = view.getExtendedPaddingTop() + view.getLayout().getLineBaseline(0);
+            int shiftedBaseBaseline = baseline + basePaint.baselineShift;
+            int expectedBaseTop = shiftedBaseBaseline + baseInkBounds.top;
+            int expectedBaseBottom = shiftedBaseBaseline + baseInkBounds.bottom;
             int total = 0;
             int top = Integer.MAX_VALUE;
             int bottom = Integer.MIN_VALUE;
@@ -428,11 +424,11 @@ public final class RubyRendererE2ETest {
                     total++;
                     top = Math.min(top, y);
                     bottom = Math.max(bottom, y);
-                    if (y >= rubyTop && y <= rubyBottom) {
+                    if (y < expectedBaseTop) {
                         rubyPixels++;
                         rubyInkBottom = Math.max(rubyInkBottom, y);
                     }
-                    if (y >= baseTop && y <= baseBottom) {
+                    if (y >= expectedBaseTop && y <= expectedBaseBottom) {
                         basePixels++;
                         baseInkTop = Math.min(baseInkTop, y);
                     }
@@ -455,15 +451,6 @@ public final class RubyRendererE2ETest {
                 && Color.blue(pixel) > Color.green(pixel) + 8;
     }
 
-    private static int baselineShift(TextView view) {
-        SuperscriptSpan[] spans = ((Spanned) view.getText())
-                .getSpans(0, view.length(), SuperscriptSpan.class);
-        if (spans.length == 0) return 0;
-        TextPaint paint = new TextPaint(view.getPaint());
-        spans[0].updateDrawState(paint);
-        return paint.baselineShift;
-    }
-
     private static TextPaint styledPaint(TextView view, int start, int end) {
         TextPaint paint = new TextPaint(view.getPaint());
         Spanned text = (Spanned) view.getText();
@@ -483,15 +470,29 @@ public final class RubyRendererE2ETest {
         int end = text.getSpanEnd(span);
         TextPaint paint = styledPaint(view, start, end);
         Paint.FontMetricsInt metrics = new Paint.FontMetricsInt();
-        paint.getFontMetricsInt(metrics);
-        span.getSize(paint, text, start, end, metrics);
-        int shift = paint.baselineShift;
-        int metricTop = ink.baseline + metrics.top + shift;
-        int metricBottom = ink.baseline + metrics.bottom + shift;
+        TextPaint measurePaint = new TextPaint(paint);
+        int baselineShift = measurePaint.baselineShift;
+        measurePaint.baselineShift = 0;
+        span.getSize(measurePaint, text, start, end, metrics);
+        if (baselineShift < 0) {
+            metrics.ascent += baselineShift;
+            metrics.top += baselineShift;
+        } else {
+            metrics.descent += baselineShift;
+            metrics.bottom += baselineShift;
+        }
+        int metricTop = ink.baseline + metrics.top;
+        int metricBottom = ink.baseline + metrics.bottom;
         int lineTop = view.getExtendedPaddingTop() + view.getLayout().getLineTop(0);
         int lineBottom = view.getExtendedPaddingTop() + view.getLayout().getLineBottom(0);
-        assertTrue("RubySpan FontMetricsInt 顶部必须包住真实像素", ink.top >= metricTop - 2);
-        assertTrue("RubySpan FontMetricsInt 底部必须包住真实像素", ink.bottom <= metricBottom + 2);
+        String measured = String.format(Locale.US,
+                "ink=[%d,%d], fm=[%d,%d] (top=%d ascent=%d descent=%d bottom=%d shift=%d), line=[%d,%d]",
+                ink.top, ink.bottom, metricTop, metricBottom, metrics.top, metrics.ascent,
+                metrics.descent, metrics.bottom, baselineShift, lineTop, lineBottom);
+        assertTrue("RubySpan FontMetricsInt 顶部必须包住真实像素; " + measured,
+                ink.top >= metricTop - 2);
+        assertTrue("RubySpan FontMetricsInt 底部必须包住真实像素; " + measured,
+                ink.bottom <= metricBottom + 2);
         assertTrue("TextView 行框顶部必须容纳全部真实字形", ink.top >= lineTop - 2);
         assertTrue("TextView 行框底部必须容纳全部真实字形", ink.bottom <= lineBottom + 2);
     }

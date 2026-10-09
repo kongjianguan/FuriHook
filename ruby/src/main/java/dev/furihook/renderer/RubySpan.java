@@ -2,6 +2,7 @@ package dev.furihook.renderer;
 
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.text.TextPaint;
 import android.text.style.CharacterStyle;
 import android.text.style.MetricAffectingSpan;
@@ -61,18 +62,20 @@ public final class RubySpan extends ReplacementSpan {
         TextPaint rubyPaint = rubyPaint(styledBasePaint);
         float baseWidth = styledBasePaint.measureText(text, start, end);
         float rubyWidth = rubyPaint.measureText(rubyText);
+        Rect baseInkBounds = textBounds(styledBasePaint, text, start, end);
+        Rect rubyInkBounds = textBounds(rubyPaint, rubyText);
         if (fm != null) {
             Paint.FontMetricsInt baseMetrics = styledBasePaint.getFontMetricsInt();
-            Paint.FontMetricsInt rubyMetrics = rubyPaint.getFontMetricsInt();
             float spacing = styledBasePaint.getTextSize() * interlinearSpacingEm;
             float offset = styledBasePaint.getTextSize() * verticalOffsetEm;
-            float rubyBaseline = baseMetrics.ascent - spacing - offset - rubyMetrics.descent;
+            float rubyBaseline = baseInkBounds.top - spacing - offset - rubyInkBounds.bottom;
             fm.top = Math.min(baseMetrics.top,
-                    (int) Math.floor(rubyBaseline + rubyMetrics.top));
-            fm.ascent = Math.min(baseMetrics.ascent,
-                    (int) Math.floor(rubyBaseline + rubyMetrics.ascent));
-            fm.descent = baseMetrics.descent;
-            fm.bottom = baseMetrics.bottom;
+                    Math.min(baseInkBounds.top,
+                            (int) Math.floor(rubyBaseline + rubyInkBounds.top)));
+            fm.ascent = Math.min(baseMetrics.ascent, Math.min(baseInkBounds.top,
+                    (int) Math.floor(rubyBaseline + rubyInkBounds.top)));
+            fm.descent = Math.max(baseMetrics.descent, baseInkBounds.bottom);
+            fm.bottom = Math.max(baseMetrics.bottom, baseInkBounds.bottom);
             fm.leading = baseMetrics.leading;
         }
         return (int) Math.ceil(Math.max(baseWidth, rubyWidth));
@@ -85,6 +88,8 @@ public final class RubySpan extends ReplacementSpan {
         TextPaint rubyPaint = rubyPaint(styledBasePaint);
         float baseWidth = styledBasePaint.measureText(text, start, end);
         float rubyWidth = rubyPaint.measureText(rubyText);
+        Rect baseInkBounds = textBounds(styledBasePaint, text, start, end);
+        Rect rubyInkBounds = textBounds(rubyPaint, rubyText);
         float spanWidth = Math.max(baseWidth, rubyWidth);
         float baseX = x + (spanWidth - baseWidth) / 2f;
         float rubyX = x + (spanWidth - rubyWidth) / 2f;
@@ -98,11 +103,10 @@ public final class RubySpan extends ReplacementSpan {
         float baseBaseline = y + styledBasePaint.baselineShift;
         canvas.drawText(text, start, end, baseX, baseBaseline, styledBasePaint);
 
-        Paint.FontMetrics rubyMetrics = rubyPaint.getFontMetrics();
         float spacing = styledBasePaint.getTextSize() * interlinearSpacingEm;
         float offset = styledBasePaint.getTextSize() * verticalOffsetEm;
-        float rubyBaseline = baseBaseline + styledBasePaint.ascent() - spacing - offset
-                - rubyMetrics.descent;
+        float rubyBaseline = baseBaseline + baseInkBounds.top - spacing - offset
+                - rubyInkBounds.bottom;
         canvas.drawText(rubyText, rubyX, rubyBaseline, rubyPaint);
     }
 
@@ -150,6 +154,17 @@ public final class RubySpan extends ReplacementSpan {
         } else {
             result.set(paint);
         }
+        return result;
+    }
+
+    private static Rect textBounds(Paint paint, CharSequence text, int start, int end) {
+        String value = text.subSequence(start, end).toString();
+        return textBounds(paint, value);
+    }
+
+    private static Rect textBounds(Paint paint, String text) {
+        Rect result = new Rect();
+        paint.getTextBounds(text, 0, text.length(), result);
         return result;
     }
 }

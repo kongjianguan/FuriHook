@@ -18,11 +18,11 @@ import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -49,7 +49,7 @@ final class TextViewAnnotator {
     private final String processName;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final WeakHashMap<TextView, ViewState> states = new WeakHashMap<>();
-    private final WindowRateLimiter captures = new WindowRateLimiter(DetectionConfig.CAPTURES_PER_SECOND);
+    private final LinkedHashSet<ViewState> pending = new LinkedHashSet<>();
     private final WindowRateLimiter logs = new WindowRateLimiter(DetectionConfig.LOGS_PER_SECOND);
     private final WindowRateLimiter applicationLogs = new WindowRateLimiter(DetectionConfig.LOGS_PER_SECOND);
     private final AtomicLong skipped = new AtomicLong();
@@ -57,6 +57,7 @@ final class TextViewAnnotator {
     private final ReadingEngine engine = new KuromojiReadingEngine();
     private final LinkedHashMap<String, List<RubySegment>> cache = new LinkedHashMap<>(16, 0.75f, true);
     private final ThreadPoolExecutor worker;
+    private boolean draining;
     private boolean analysisDisabled;
 
     TextViewAnnotator(ModuleLog log, String packageName, String processName) {
@@ -64,7 +65,7 @@ final class TextViewAnnotator {
         this.packageName = packageName;
         this.processName = processName;
         worker = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(DetectionConfig.QUEUE_CAPACITY), runnable -> {
+                new ArrayBlockingQueue<>(1), runnable -> {
                     Thread thread = new Thread(runnable, "FuriHook-reading");
                     thread.setDaemon(true);
                     thread.setPriority(Thread.MIN_PRIORITY);
@@ -92,13 +93,17 @@ final class TextViewAnnotator {
         ViewState state;
         synchronized (states) {
             state = states.get(view);
-            if (state == null) {
-                if (states.size() >= DetectionConfig.MAX_TRACKED_VIEWS) {
-                    for (Map.Entry<TextView, ViewState> entry : states.entrySet()) {
-                        removeLayoutListener(entry.getKey(), entry.getValue());
-                    }
-                    states.clear();
+            if (state == null && states.size() >= DetectionConfig.MAX_TRACKED_VIEWS
+                    || pending.size() >= DetectionConfig.MAX_TRACKED_VIEWS
+                    && !pending.contains(state)) {
+                for (Map.Entry<TextView, ViewState> entry : states.entrySet()) {
+                    removeLayoutListener(entry.getKey(), entry.getValue());
                 }
+                states.clear();
+                pending.clear();
+                state = null;
+            }
+            if (state == null) {
                 state = new ViewState(view);
                 states.put(view, state);
             }
@@ -107,21 +112,20 @@ final class TextViewAnnotator {
             state.result = null;
             removeLayoutListener(view, state);
             if (protectedText(view) || text == null || text.length() == 0 || renderer.hasRuby(text)) {
+                pending.remove(state);
                 return;
             }
             int end = snapshotEnd(text);
             String snapshot = TextUtils.substring(text, 0, end);
             state.input = new Input(snapshot, text, state.generation, view.getId(),
                     view.getClass().getName());
-            if (state.scheduled) {
+            if (!pending.add(state)) {
                 skipped.incrementAndGet();
-                return;
             }
-            if (!captures.acquire(SystemClock.elapsedRealtime())) {
-                skipped.incrementAndGet();
-                return;
+            if (!draining) {
+                draining = true;
+                worker.execute(this::drain);
             }
-            submit(state);
         }
     }
 
@@ -157,25 +161,28 @@ final class TextViewAnnotator {
         return false;
     }
 
-    private void submit(ViewState state) {
-        state.scheduled = true;
-        try {
-            worker.execute(() -> analyze(state));
-        } catch (RejectedExecutionException rejected) {
-            state.scheduled = false;
-            skipped.incrementAndGet();
+    private void drain() {
+        while (true) {
+            ViewState state;
+            Input input;
+            synchronized (states) {
+                if (pending.isEmpty()) {
+                    draining = false;
+                    return;
+                }
+                state = pending.iterator().next();
+                pending.remove(state);
+                TextView view = state.view.get();
+                input = view != null && states.get(view) == state ? state.input : null;
+            }
+            if (input != null) {
+                analyze(state, input);
+            }
         }
     }
 
-    private void analyze(ViewState state) {
-        Input input;
-        synchronized (states) {
-            input = state.input;
-        }
+    private void analyze(ViewState state, Input input) {
         try {
-            if (input == null) {
-                return;
-            }
             long started = SystemClock.elapsedRealtime();
             boolean candidate = JapaneseDetector.containsKanjiCandidate(input.snapshot);
             logObservation(input, candidate);
@@ -196,13 +203,6 @@ final class TextViewAnnotator {
         } catch (Throwable failure) {
             analysisDisabled = true;
             failure("ruby_analysis_failed", failure);
-        } finally {
-            synchronized (states) {
-                state.scheduled = false;
-                if (state.input != null && state.input != input) {
-                    submit(state);
-                }
-            }
         }
     }
 
@@ -352,7 +352,6 @@ final class TextViewAnnotator {
         final WeakReference<TextView> view;
         long generation;
         Input input;
-        boolean scheduled;
         ApplyResult result;
         View.OnLayoutChangeListener layoutListener;
         long appliedGeneration = -1;

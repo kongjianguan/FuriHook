@@ -43,7 +43,7 @@ $prefix = 'dev.furihook: '
 $testEvents = @($testLogs | Where-Object { $_.StartsWith($prefix) } | ForEach-Object {
     $_.Substring($prefix.Length) | ConvertFrom-Json
 })
-foreach ($event in @('module_loaded', 'hook_registered', 'text_observed')) {
+foreach ($event in @('module_loaded', 'hook_registered', 'text_observed', 'ruby_applied')) {
     if (@($testEvents | Where-Object event -eq $event).Count -eq 0) { throw "instrumentation 期间缺少 Hook 事件：$event" }
 }
 if (@($testEvents | Where-Object event -Match 'failed').Count -ne 0) { throw 'instrumentation 期间 Hook 日志报告错误' }
@@ -67,6 +67,10 @@ if ($registration.Count -ne 1 -or $registration[0].methods.Count -ne 2) { throw 
 if (@($events | Where-Object event -Match 'failed').Count -ne 0) { throw 'Hook 日志报告错误' }
 $observed = @($events | Where-Object event -eq 'text_observed')
 if ($observed.Count -eq 0) { throw '没有捕获到真实文本更新' }
+$applied = @($events | Where-Object event -eq 'ruby_applied')
+if (@($applied | Where-Object { $_.viewId -eq 1001 -and $_.segmentCount -eq 4 }).Count -eq 0) {
+    throw '日语样例没有报告四个真实注音范围'
+}
 foreach ($viewId in @(1001, 1002, 1003, 1004)) {
     $sample = @($observed | Where-Object viewId -eq $viewId)
     if ($sample.Count -eq 0) { throw "缺少样例 View 的候选结果：$viewId" }
@@ -95,6 +99,7 @@ $report = [ordered]@{
     sensitiveInputsObserved = $false
     textExcerptLength = 0
     observationCount = $observed.Count
+    rubyApplicationCount = $applied.Count
     moduleApkSha256 = (Get-FileHash "$Workspace\app-debug.apk" -Algorithm SHA256).Hash.ToLower()
 }
 $events | ConvertTo-Json -Depth 5 | Set-Content "$outputDirectory\hook-events.json" -Encoding utf8
