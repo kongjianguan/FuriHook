@@ -23,11 +23,12 @@ foreach ($apk in @('app-debug.apk', 'testapp-debug.apk', 'testapp-debug-androidT
     Invoke-Device @('install', '-r', $path) | Write-Output
 }
 Invoke-Device @('logcat', '-c') | Out-Null
-$testOutput = Invoke-Device @('shell', 'am', 'instrument', '-w', '-r', 'dev.furihook.testapp.test/androidx.test.runner.AndroidJUnitRunner')
+$testClasses = 'dev.furihook.testapp.MainActivityE2ETest,dev.furihook.testapp.RubyRendererE2ETest'
+$testOutput = Invoke-Device @('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', $testClasses, 'dev.furihook.testapp.test/androidx.test.runner.AndroidJUnitRunner')
 $testOutput | Set-Content "$outputDirectory\instrumentation.txt" -Encoding utf8
 $testOutput | Write-Output
 $testText = $testOutput -join "`n"
-if (-not $testText.Contains('OK (6 tests)')) { throw 'Android E2E 没有通过全部六个测试，查看 instrumentation.txt' }
+if (-not $testText.Contains('OK (14 tests)')) { throw 'Android E2E 没有通过全部十四个测试，查看 instrumentation.txt' }
 
 $launch = Invoke-Device @('shell', 'am', 'start', '-W', '-n', 'dev.furihook/.MainActivity')
 $launch | Set-Content "$outputDirectory\module-launch.txt" -Encoding utf8
@@ -36,7 +37,7 @@ Invoke-Device @('shell', 'uiautomator', 'dump', '/sdcard/furihook-module-ui.xml'
 Invoke-Device @('pull', '/sdcard/furihook-module-ui.xml', "$outputDirectory\module-ui.xml") | Out-Null
 [xml]$tree = Get-Content "$outputDirectory\module-ui.xml" -Raw -Encoding utf8
 $texts = @($tree.SelectNodes('//node') | ForEach-Object { $_.GetAttribute('text') })
-foreach ($expected in @('FuriHook 0.1.0', '阶段一 · TextView 候选检测', '测试方法')) {
+foreach ($expected in @('FuriHook 0.2.0', '阶段二 · TextView 本地振假名', '测试方法')) {
     if ($expected -notin $texts) { throw "模块界面缺少内容：$expected" }
 }
 $crashes = Invoke-Device @('logcat', '-d', '-b', 'crash')
@@ -47,7 +48,9 @@ $report = [ordered]@{
     hostName = $env:COMPUTERNAME
     serial = $Serial
     apiLevel = ((Invoke-Device @('shell', 'getprop', 'ro.build.version.sdk')) -join '').Trim()
-    testsPassed = 6
+    testsPassed = 14
+    originalApplicationTestsPassed = 6
+    rubyRendererE2ETestsPassed = 8
     moduleInstalled = $true
     moduleActivityStarted = $true
     moduleUiAssertionsPassed = $true

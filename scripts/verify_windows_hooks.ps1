@@ -47,6 +47,10 @@ foreach ($event in @('module_loaded', 'hook_registered', 'text_observed')) {
     if (@($testEvents | Where-Object event -eq $event).Count -eq 0) { throw "instrumentation 期间缺少 Hook 事件：$event" }
 }
 if (@($testEvents | Where-Object event -Match 'failed').Count -ne 0) { throw 'instrumentation 期间 Hook 日志报告错误' }
+$hookOutput = Invoke-Device @('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', 'dev.furihook.testapp.RubyHookE2ETest', 'dev.furihook.testapp.test/androidx.test.runner.AndroidJUnitRunner')
+$hookOutput | Set-Content "$outputDirectory\ruby-hook-instrumentation.txt" -Encoding utf8
+$hookText = $hookOutput -join "`n"
+if (-not $hookText.Contains('OK (1 test)')) { throw '真实 Hook Ruby 注音端到端测试未通过，查看 ruby-hook-instrumentation.txt' }
 Invoke-Device @('shell', 'am', 'force-stop', 'dev.furihook.testapp') | Out-Null
 Invoke-Device @('logcat', '-c') | Out-Null
 $launch = Invoke-Device @('shell', 'am', 'start', '-W', '-n', 'dev.furihook.testapp/.MainActivity')
@@ -83,7 +87,9 @@ $report = [ordered]@{
     frameworkVersion = $status.data.'Framework Version'
     modernApi = $status.data.'API Version'
     hookExecutionVerified = $true
-    testsPassedWithHooksEnabled = 6
+    applicationTestsPassedWithHooksEnabled = 6
+    rubyRendererE2ETestsPassedWithHooksEnabled = 8
+    hookIntegrationE2ETestsPassed = 1
     registeredMethods = $registration[0].methods
     candidateSampleViewIds = @(1001, 1002, 1003, 1004)
     sensitiveInputsObserved = $false
@@ -92,5 +98,6 @@ $report = [ordered]@{
     moduleApkSha256 = (Get-FileHash "$Workspace\app-debug.apk" -Algorithm SHA256).Hash.ToLower()
 }
 $events | ConvertTo-Json -Depth 5 | Set-Content "$outputDirectory\hook-events.json" -Encoding utf8
+$hookOutput | Set-Content "$outputDirectory\ruby-hook-instrumentation.txt" -Encoding utf8
 $report | ConvertTo-Json -Depth 5 | Set-Content "$outputDirectory\hook-verification.json" -Encoding utf8
 $report | ConvertTo-Json -Depth 5

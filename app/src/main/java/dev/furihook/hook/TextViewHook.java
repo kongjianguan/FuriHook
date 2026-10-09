@@ -11,14 +11,14 @@ final class TextViewHook {
     private TextViewHook() {
     }
 
-    static XposedInterface.HookHandle[] register(XposedModule module, TextViewObserver observer)
+    static XposedInterface.HookHandle[] register(XposedModule module, TextViewAnnotator annotator)
             throws Throwable {
         Method setText = TextView.class.getDeclaredMethod("setText",
                 CharSequence.class, TextView.BufferType.class);
         Method setChars = TextView.class.getDeclaredMethod("setText", char[].class, int.class, int.class);
-        XposedInterface.HookHandle first = registerMethod(module, observer, setText, "text");
+        XposedInterface.HookHandle first = registerMethod(module, annotator, setText, "text");
         try {
-            XposedInterface.HookHandle second = registerMethod(module, observer, setChars, "chars");
+            XposedInterface.HookHandle second = registerMethod(module, annotator, setChars, "chars");
             return new XposedInterface.HookHandle[]{first, second};
         } catch (Throwable failure) {
             first.unhook();
@@ -27,17 +27,30 @@ final class TextViewHook {
     }
 
     private static XposedInterface.HookHandle registerMethod(XposedModule module,
-            TextViewObserver observer, Method method, String id) {
+            TextViewAnnotator annotator, Method method, String id) {
         return module.hook(method)
-                .setId("dev.furihook.textview.observe." + id)
+                .setId("dev.furihook.textview.ruby." + id)
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
-                    // 原调用只执行一次，宿主异常和返回结果保持原样。
-                    Object result = chain.proceed();
+                    Object[] arguments = null;
                     try {
-                        observer.observe((TextView) chain.getThisObject());
+                        if (id.equals("text")) {
+                            TextView view = (TextView) chain.getThisObject();
+                            CharSequence text = (CharSequence) chain.getArg(0);
+                            TextView.BufferType type = (TextView.BufferType) chain.getArg(1);
+                            if (annotator.shouldPrepareBuffer(view, text, type)) {
+                                arguments = new Object[]{text, TextView.BufferType.SPANNABLE};
+                            }
+                        }
                     } catch (Throwable failure) {
-                        observer.failure(failure);
+                        annotator.failure("buffer_preparation_failed", failure);
+                    }
+                    // 原调用执行一次，宿主异常继续传播；后续只修改 span。
+                    Object result = arguments == null ? chain.proceed() : chain.proceed(arguments);
+                    try {
+                        annotator.observe((TextView) chain.getThisObject());
+                    } catch (Throwable failure) {
+                        annotator.failure("observation_failed", failure);
                     }
                     return result;
                 });

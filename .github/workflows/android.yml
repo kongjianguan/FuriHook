@@ -30,7 +30,7 @@ jobs:
       - name: Install Android SDK components
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - name: Build and run unit tests and lint
-        run: ./gradlew :app:assembleDebug :testapp:assembleDebug :testapp:assembleDebugAndroidTest :core:test :app:lintDebug :testapp:lintDebug --stacktrace
+        run: ./gradlew :app:assembleDebug :testapp:assembleDebug :testapp:assembleDebugAndroidTest :core:test :core:verifyReadingCorpus :app:lintDebug :testapp:lintDebug --stacktrace
       - name: Verify packaged Modern API metadata
         run: |
           python3 -m venv work/verification-venv
@@ -47,6 +47,7 @@ jobs:
             testapp/build/outputs/apk/androidTest/debug/*.apk
             core/build/test-results/test/
             core/build/reports/tests/test/
+            core/build/reports/reading-corpus.tsv
             app/build/reports/lint-results-debug.*
             testapp/build/reports/lint-results-debug.*
             work/apk-verification/

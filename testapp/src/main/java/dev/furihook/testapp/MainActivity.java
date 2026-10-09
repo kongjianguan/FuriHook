@@ -141,7 +141,10 @@ public final class MainActivity extends Activity {
         updateButton.setTag("dynamic_update_button");
         updateButton.setOnClickListener(view -> {
             dynamicCount++;
-            dynamicText.setText("动态更新第 " + dynamicCount + " 次：明日は図書館へ行きます。");
+            String sentence = dynamicCount % 2 == 1
+                    ? "明日は図書館へ行きます。"
+                    : "今日は学校へ行きます。";
+            dynamicText.setText("动态更新第 " + dynamicCount + " 次：" + sentence);
         });
         content.addView(updateButton);
 
@@ -237,7 +240,9 @@ public final class MainActivity extends Activity {
 
         @Override
         public void onBindViewHolder(@NonNull RowHolder holder, int position) {
-            holder.text.setText("項目 " + position + "：日本語の一覧サンプル");
+            holder.text.setText(position == 91
+                    ? "Item 91 contains English only."
+                    : "項目 " + position + "：日本語の一覧サンプル");
             holder.text.setTag(position);
         }
 

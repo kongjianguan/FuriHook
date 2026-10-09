@@ -21,7 +21,7 @@ def smoke_module(serial, output):
     adb("pull", "/sdcard/furihook-module-ui.xml", str(tree_path))
     tree = ET.parse(tree_path)
     texts = [node.attrib.get("text", "") for node in tree.iter("node")]
-    for expected in ("FuriHook 0.1.0", "阶段一 · TextView 候选检测", "测试方法"):
+    for expected in ("FuriHook 0.2.0", "阶段二 · TextView 本地振假名", "测试方法"):
         if expected not in texts:
             raise AssertionError(f"模块界面缺少内容：{expected}")
     report = {

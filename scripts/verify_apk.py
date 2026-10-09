@@ -19,12 +19,30 @@ def inspect_apk(apk, analyzer, output):
             "exceptionMode=protective\nautoHotReload=false\n"
         ),
     }
+    dictionary_files = (
+        "characterDefinitions.bin", "connectionCosts.bin", "doubleArrayTrie.bin",
+        "tokenInfoDictionary.bin", "tokenInfoFeaturesMap.bin",
+        "tokenInfoPartOfSpeechMap.bin", "tokenInfoTargetMap.bin", "unknownDictionary.bin",
+    )
+    legal_files = {
+        "assets/legal/kuromoji/LICENSE.md": "76b21bab0528f2bb16cd6ce93388d2cc50e5b30ace75d18562f3f0d79270a5bb",
+        "assets/legal/kuromoji/NOTICE.md": "c408a3e8e875434560dbb9ab8d4a78b6e3abc90bd3a57d12d0b41cac99d287bf",
+    }
     with zipfile.ZipFile(apk) as archive:
         for name, value in expected.items():
             if archive.read(name).decode("utf-8") != value:
                 raise AssertionError(f"模块元数据错误：{name}")
         if "assets/xposed_init" in archive.namelist():
             raise AssertionError("APK 包含旧版入口")
+        dictionary_bytes = 0
+        for name in dictionary_files:
+            entry = archive.getinfo("com/atilika/kuromoji/ipadic/" + name)
+            if entry.file_size <= 0:
+                raise AssertionError(f"APK 词典为空：{name}")
+            dictionary_bytes += entry.file_size
+        for name, digest in legal_files.items():
+            if hashlib.sha256(archive.read(name)).hexdigest() != digest:
+                raise AssertionError(f"APK 缺少完整原始许可声明：{name}")
         classes = set()
         for name in archive.namelist():
             if name.startswith("classes") and name.endswith(".dex") and "/" not in name:
@@ -65,6 +83,9 @@ def inspect_apk(apk, analyzer, output):
         "metadata": expected,
         "bundledApiImplementation": False,
         "definedClassCount": len(classes),
+        "dictionaryFiles": list(dictionary_files),
+        "uncompressedDictionaryBytes": dictionary_bytes,
+        "legalNoticesSha256": legal_files,
         "legacyEntry": False,
         "hookExecutionVerified": False,
     }

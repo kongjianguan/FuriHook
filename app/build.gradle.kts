@@ -10,8 +10,8 @@ android {
         applicationId = "dev.furihook"
         minSdk = 28
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildFeatures {
@@ -33,9 +33,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    packaging {
+        resources.merges += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/CONTRIBUTORS.md")
+    }
 }
 
 dependencies {
     implementation(project(":core"))
+    implementation(project(":ruby"))
     compileOnly("io.github.libxposed:api:102.0.0")
 }

@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "FuriHook"
-include(":app", ":core", ":testapp")
+include(":app", ":core", ":ruby", ":testapp")

@@ -33,8 +33,8 @@ final class HookRegistry {
             return;
         }
         try {
-            TextViewObserver observer = new TextViewObserver(log, packageName, processName);
-            handles = TextViewHook.register(module, observer);
+            TextViewAnnotator annotator = new TextViewAnnotator(log, packageName, processName);
+            handles = TextViewHook.register(module, annotator);
             log.event("{\"event\":\"hook_registered\",\"methods\":[\"TextView.setText(CharSequence,BufferType)\",\"TextView.setText(char[],int,int)\"],\"api\":102}");
         } catch (Throwable failure) {
             log.failure("hook_registration_failed", failure);

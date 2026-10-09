@@ -19,9 +19,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    packaging {
+        resources.merges += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/CONTRIBUTORS.md")
+    }
 }
 
 dependencies {
+    implementation(project(":core"))
+    implementation(project(":ruby"))
     implementation("androidx.recyclerview:recyclerview:1.4.0")
 
     androidTestImplementation("androidx.test:runner:1.7.0")
