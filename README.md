@@ -66,7 +66,8 @@ Debug 构建默认启用检测日志，可使用以下命令关闭；Release 构
 随后检查 APK 中的入口、模块属性、作用域、SDK、网络权限、八个词典数据文件与完整许可声明，确认 libxposed API 类没有被打包。API 28 和 36 的真实 Android 模拟器运行：
 
 ```bash
-./gradlew :testapp:connectedDebugAndroidTest
+./gradlew :testapp:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=dev.furihook.testapp.MainActivityE2ETest,dev.furihook.testapp.RubyRendererE2ETest
 ```
 
 14 个普通 E2E 验证原有文本、重载、输入与生命周期，以及真实词典、RubySpan、TextView Layout、Canvas 像素位置、富文本样式、点击、选择、长读音、动态文本和 RecyclerView 复用。云端还安装并启动模块说明界面，通过 UI XML 检查名称、版本和阶段内容。Hook 专项测试只在已经启用模块的 Windows 设备执行，读取目标 TextView 的实际注音，校验精确范围、读音与交互。
@@ -115,7 +116,7 @@ pwsh -NoProfile -File scripts/test_windows_emulator.ps1
 
 自定义 TextView 子类完全覆盖目标方法且不调用父类时，基类 Hook 无法处理更新。Editable、PrecomputedText、转换控件、Compose、WebView DOM 和自定义 Canvas 绘制需要独立适配。字符数组调用只有现有 Spannable 缓冲支持原地注音；模块不改变该入口的原始参数。
 
-超过 2048 UTF-16 code unit 的尾部不会分析，`truncated` 明示该情况。超过 256 个活跃视图时清理已有状态，后续文本更新重新建立状态。候选检测无法区分日语、中文、韩文中的 Han 字符；IPADIC 的歧义读音、专有名词和新词存在准确率限制。
+超过 2048 UTF-16 code unit 的尾部不会分析，`truncated` 明示该情况。视图状态或待处理集合达到 256 项上限时清理已有状态，后续文本更新重新建立状态。候选检测无法区分日语、中文、韩文中的 Han 字符；IPADIC 的歧义读音、专有名词和新词存在准确率限制。
 
 ReplacementSpan 将覆盖范围作为原子排版单位，词内光标粒度会减少，完整词不能跨行拆分。布局变化会重新检查可用宽度与字号；其他字体属性或词内样式在注音完成后发生变化时，需要额外验证。排版行为和保护规则见 [Ruby 渲染](docs/RUBY_RENDERER.md)，后台生命周期见 [TextView 管线](docs/TEXTVIEW_PIPELINE.md)。
 

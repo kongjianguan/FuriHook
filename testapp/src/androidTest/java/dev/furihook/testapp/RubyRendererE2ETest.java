@@ -398,7 +398,11 @@ public final class RubyRendererE2ETest {
         assertTrue(view.getWidth() > 0 && view.getHeight() > 0);
         Bitmap bitmap = Bitmap.createBitmap(view.getWidth(), view.getHeight(), Bitmap.Config.ARGB_8888);
         try {
+            TextPaint viewPaintBeforeDraw = new TextPaint(view.getPaint());
+            int scrollXBeforeDraw = view.getScrollX();
+            int scrollYBeforeDraw = view.getScrollY();
             view.draw(new Canvas(bitmap));
+            TextPaint viewPaintAfterDraw = new TextPaint(view.getPaint());
             RubySpan ruby = rubySpans(view.getText())[0];
             Spanned text = (Spanned) view.getText();
             int start = text.getSpanStart(ruby);
@@ -407,7 +411,9 @@ public final class RubyRendererE2ETest {
             String baseText = text.subSequence(start, end).toString();
             Rect baseInkBounds = new Rect();
             basePaint.getTextBounds(baseText, 0, baseText.length(), baseInkBounds);
-            int baseline = view.getExtendedPaddingTop() + view.getLayout().getLineBaseline(0);
+            int layoutBaseline = view.getLayout().getLineBaseline(0);
+            int extendedPaddingTop = view.getExtendedPaddingTop();
+            int baseline = extendedPaddingTop + layoutBaseline;
             int shiftedBaseBaseline = baseline + basePaint.baselineShift;
             int expectedBaseTop = shiftedBaseBaseline + baseInkBounds.top;
             int expectedBaseBottom = shiftedBaseBaseline + baseInkBounds.bottom;
@@ -434,8 +440,18 @@ public final class RubyRendererE2ETest {
                     }
                 }
             }
+            String diagnostics = String.format(Locale.US,
+                    "view=[%dx%d scroll=(%d,%d)->(%d,%d) paddingTop=%d layoutBaseline=%d layoutHeight=%d] "
+                            + "paintBefore={%s} paintAfter={%s} basePaint={%s} baseText=%s baseBounds=%s "
+                            + "basePixelsTop=%d expectedBase=[%d,%d] rubyPixels=%d rubyBottom=%d",
+                    view.getWidth(), view.getHeight(), scrollXBeforeDraw, scrollYBeforeDraw,
+                    view.getScrollX(), view.getScrollY(), extendedPaddingTop, layoutBaseline,
+                    view.getLayout().getHeight(), paintDescription(viewPaintBeforeDraw),
+                    paintDescription(viewPaintAfterDraw), paintDescription(basePaint), baseText,
+                    baseInkBounds, baseInkTop, expectedBaseTop, expectedBaseBottom,
+                    rubyPixels, rubyInkBottom);
             return new InkBounds(total, rubyPixels, basePixels, top, bottom,
-                    rubyInkBottom, baseInkTop, baseline);
+                    rubyInkBottom, baseInkTop, baseline, diagnostics);
         } finally {
             bitmap.recycle();
         }
@@ -463,6 +479,15 @@ public final class RubyRendererE2ETest {
         return paint;
     }
 
+    private static String paintDescription(TextPaint paint) {
+        Paint.FontMetricsInt metrics = paint.getFontMetricsInt();
+        Typeface typeface = paint.getTypeface();
+        return String.format(Locale.US,
+                "size=%.2f typeface=%s style=%d shift=%d metrics=[%d,%d,%d,%d]",
+                paint.getTextSize(), typeface, typeface == null ? -1 : typeface.getStyle(),
+                paint.baselineShift, metrics.top, metrics.ascent, metrics.descent, metrics.bottom);
+    }
+
     private static void assertTextMetricsContainInk(TextView view, InkBounds ink) {
         RubySpan span = rubySpans(view.getText())[0];
         Spanned text = (Spanned) view.getText();
@@ -488,7 +513,8 @@ public final class RubyRendererE2ETest {
         String measured = String.format(Locale.US,
                 "ink=[%d,%d], fm=[%d,%d] (top=%d ascent=%d descent=%d bottom=%d shift=%d), line=[%d,%d]",
                 ink.top, ink.bottom, metricTop, metricBottom, metrics.top, metrics.ascent,
-                metrics.descent, metrics.bottom, baselineShift, lineTop, lineBottom);
+                metrics.descent, metrics.bottom, baselineShift, lineTop, lineBottom)
+                + "; " + ink.diagnostics;
         assertTrue("RubySpan FontMetricsInt 顶部必须包住真实像素; " + measured,
                 ink.top >= metricTop - 2);
         assertTrue("RubySpan FontMetricsInt 底部必须包住真实像素; " + measured,
@@ -506,9 +532,10 @@ public final class RubyRendererE2ETest {
         final int rubyBottom;
         final int baseTop;
         final int baseline;
+        final String diagnostics;
 
         InkBounds(int totalPixels, int rubyPixels, int basePixels, int top, int bottom,
-                int rubyBottom, int baseTop, int baseline) {
+                int rubyBottom, int baseTop, int baseline, String diagnostics) {
             this.totalPixels = totalPixels;
             this.rubyPixels = rubyPixels;
             this.basePixels = basePixels;
@@ -517,6 +544,7 @@ public final class RubyRendererE2ETest {
             this.rubyBottom = rubyBottom;
             this.baseTop = baseTop;
             this.baseline = baseline;
+            this.diagnostics = diagnostics;
         }
     }
 
