@@ -5,3 +5,4 @@ local.properties
 *.iml
 work/
 .DS_Store
+__pycache__/
