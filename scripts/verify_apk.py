@@ -5,8 +5,12 @@ import pathlib
 import subprocess
 import zipfile
 
+from androguard.core.dex import DEX
+from loguru import logger
+
 
 def inspect_apk(apk, analyzer, output):
+    logger.disable("androguard")
     expected = {
         "META-INF/xposed/java_init.list": "dev.furihook.hook.FuriHookModule\n",
         "META-INF/xposed/scope.list": "dev.furihook.testapp\n",
@@ -21,6 +25,15 @@ def inspect_apk(apk, analyzer, output):
                 raise AssertionError(f"模块元数据错误：{name}")
         if "assets/xposed_init" in archive.namelist():
             raise AssertionError("APK 包含旧版入口")
+        classes = set()
+        for name in archive.namelist():
+            if name.startswith("classes") and name.endswith(".dex") and "/" not in name:
+                classes.update(definition.get_name() for definition in DEX(archive.read(name)).get_classes())
+        if "Ldev/furihook/hook/FuriHookModule;" not in classes:
+            raise AssertionError("APK 缺少模块入口类")
+        if any(name.startswith(("Lio/github/libxposed/api/", "Lde/robv/android/xposed/"))
+               for name in classes):
+            raise AssertionError("APK 不得打包 Xposed API 实现")
 
     def analyze(*args):
         return subprocess.run([str(analyzer), *args, str(apk)], check=True,
@@ -36,13 +49,11 @@ def inspect_apk(apk, analyzer, output):
         raise AssertionError("模块不得申请网络权限")
 
     packages = analyze("dex", "packages", "--defined-only")
-    if "dev.furihook.hook.FuriHookModule" not in packages:
-        raise AssertionError("APK 缺少模块入口类")
-    if "io.github.libxposed.api" in packages or "de.robv.android.xposed" in packages:
-        raise AssertionError("APK 不得打包 Xposed API 实现")
 
     output.mkdir(parents=True, exist_ok=True)
     (output / "dex-packages.txt").write_text(packages + "\n", encoding="utf-8")
+    (output / "defined-classes.json").write_text(
+        json.dumps(sorted(classes), indent=2) + "\n", encoding="utf-8")
     with apk.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     report = {
@@ -53,6 +64,7 @@ def inspect_apk(apk, analyzer, output):
         "targetSdk": int(target_sdk),
         "metadata": expected,
         "bundledApiImplementation": False,
+        "definedClassCount": len(classes),
         "legacyEntry": False,
         "hookExecutionVerified": False,
     }

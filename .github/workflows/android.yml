@@ -32,7 +32,10 @@ jobs:
       - name: Build and run unit tests and lint
         run: ./gradlew :app:assembleDebug :testapp:assembleDebug :core:test :app:lintDebug :testapp:lintDebug --stacktrace
       - name: Verify packaged Modern API metadata
-        run: python3 scripts/verify_apk.py --apk app/build/outputs/apk/debug/app-debug.apk --apkanalyzer apkanalyzer --output work/apk-verification
+        run: |
+          python3 -m venv work/verification-venv
+          work/verification-venv/bin/pip install -r scripts/requirements.txt
+          work/verification-venv/bin/python scripts/verify_apk.py --apk app/build/outputs/apk/debug/app-debug.apk --apkanalyzer apkanalyzer --output work/apk-verification
       - name: Upload APKs and verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

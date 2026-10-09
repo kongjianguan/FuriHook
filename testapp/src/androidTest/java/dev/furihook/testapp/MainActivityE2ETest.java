@@ -127,23 +127,37 @@ public final class MainActivityE2ETest {
     @Test
     public void periodicUpdatesStopWithActivityAndResumeWithLifecycle() throws Exception {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
-            Thread.sleep(1_200L);
-            int[] count = new int[1];
-            scenario.onActivity(activity -> count[0] = activity.periodicCount());
-            assertTrue(count[0] >= 1);
+            int initialCount = readPeriodicCount(scenario);
+            int runningCount = awaitPeriodicCountGreaterThan(scenario, initialCount);
 
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED);
+            int stoppedCount = readPeriodicCount(scenario);
             Thread.sleep(1_200L);
-            int[] stoppedCount = new int[1];
-            scenario.onActivity(activity -> stoppedCount[0] = activity.periodicCount());
-            assertEquals(count[0], stoppedCount[0]);
+            assertEquals(stoppedCount, readPeriodicCount(scenario));
 
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED);
-            Thread.sleep(1_200L);
-            int[] resumedCount = new int[1];
-            scenario.onActivity(activity -> resumedCount[0] = activity.periodicCount());
-            assertTrue(resumedCount[0] > stoppedCount[0]);
+            int resumedCount = awaitPeriodicCountGreaterThan(scenario, stoppedCount);
+            assertTrue("恢复后周期计数应继续增加", resumedCount > runningCount);
         }
+    }
+
+    private static int readPeriodicCount(ActivityScenario<MainActivity> scenario) {
+        int[] count = new int[1];
+        scenario.onActivity(activity -> count[0] = activity.periodicCount());
+        return count[0];
+    }
+
+    private static int awaitPeriodicCountGreaterThan(
+            ActivityScenario<MainActivity> scenario, int previousCount) throws InterruptedException {
+        long deadline = android.os.SystemClock.uptimeMillis() + 5_000L;
+        int currentCount = readPeriodicCount(scenario);
+        while (currentCount <= previousCount
+                && android.os.SystemClock.uptimeMillis() < deadline) {
+            Thread.sleep(100L);
+            currentCount = readPeriodicCount(scenario);
+        }
+        assertTrue("周期计数应在 5 秒内增加", currentCount > previousCount);
+        return currentCount;
     }
 
     private static String text(MainActivity activity, int id) {
