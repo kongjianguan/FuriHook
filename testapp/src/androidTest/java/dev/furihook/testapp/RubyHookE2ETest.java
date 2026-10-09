@@ -138,16 +138,21 @@ public final class RubyHookE2ETest {
                 assertTrue(dynamicButton.performClick());
             });
 
-            awaitRuby(scenario, MainActivity.ID_DYNAMIC, 2);
+            awaitRuby(scenario, MainActivity.ID_DYNAMIC, 6);
             scenario.onActivity(activity -> {
                 TextView dynamic = activity.textView(MainActivity.ID_DYNAMIC);
                 String text = dynamic.getText().toString();
                 assertEquals("动态更新第 2 次：今日は学校へ行きます。", text);
                 int todayStart = text.indexOf("今日");
                 int schoolStart = text.indexOf("学校");
+                int goStart = text.indexOf("行");
                 assertRuby(dynamic.getText(), new Expected[] {
+                        new Expected(2, 4, "更新", "こうしん", "こうしん"),
+                        new Expected(4, 5, "第", "だい", "だい"),
+                        new Expected(8, 9, "次", "つぎ", "つぎ"),
                         new Expected(todayStart, todayStart + 2, "今日", "きょう", "きょう"),
-                        new Expected(schoolStart, schoolStart + 2, "学校", "がっこう", "がっこう")
+                        new Expected(schoolStart, schoolStart + 2, "学校", "がっこう", "がっこう"),
+                        new Expected(goStart, goStart + 1, "行", "いき", "い")
                 });
 
                 androidx.recyclerview.widget.RecyclerView recycler = activity.recyclerView();
