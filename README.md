@@ -89,10 +89,13 @@ APK 标准输出路径：
 
 ```powershell
 pwsh -NoProfile -File scripts/start_windows_emulator.ps1
+pwsh -NoProfile -File scripts/provision_windows_apks.ps1
 pwsh -NoProfile -File scripts/test_windows_emulator.ps1
 ```
 
 测试脚本安装 APK，执行相同的普通 instrumentation 场景，检查模块界面 XML，并保存 APK SHA-256、测试输出和验证 JSON 到工作目录的 `results/`。完成后可通过 SDK 中的 `adb -s emulator-5580 emu kill` 关闭该测试设备。
+
+跨云端构建的 Debug 签名独立。`provision_windows_apks.ps1` 只允许操作 `FuriHook_API35`，重新安装本项目的三个测试包，再启用模块和默认测试作用域；它清除专用设备上这些包的数据。
 
 专用设备已经安装 [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) 与 [Vector v2.2](https://github.com/JingMatrix/Vector/releases/tag/v2.2)。Vector 属于 LSPosed 系谱的独立项目，实现 libxposed API 102。`scripts/verify_windows_hooks.ps1` 检查框架、作用域，运行普通 E2E 和独立 Hook 注音测试，再检查初始化、注册、检测和注音事件。实际结果及复验方法见 [设备验证](docs/DEVICE_VALIDATION.md)。
 

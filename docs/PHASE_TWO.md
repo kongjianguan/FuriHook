@@ -1,8 +1,8 @@
-# 第二阶段研发要求
+# 后续研发要求
 
 ## 本地读音分析
 
-现有 `ReadingEngine.analyze(CharSequence)` 返回 `RubySegment` 集合，每个范围使用相对于原文的 UTF-16 半开区间。实现需要验证范围顺序、重叠与代理对边界，保留完整词语读音和对应汉字段落的注音，处理活用、熟字训和专有名词。禁止逐个汉字独立查询读音。
+`KuromojiReadingEngine.analyze(CharSequence)` 已使用内置 IPADIC 返回 `RubySegment`，每个范围采用 UTF-16 半开区间，保留完整词语读音和汉字段注音。后续扩展需要继续处理词典歧义、专有名词和新词，并使用真实语料量化准确率。不能按单个汉字独立查词。
 
 研究候选采用 [Sudachi Java 官方实现](https://github.com/WorksApplications/Sudachi)、[Kuromoji 官方实现](https://github.com/atilika/kuromoji)和 [MeCab 官方资料](https://github.com/taku910/mecab/blob/master/mecab/doc/index.html)。通过同一真实日语语料比较分词/读音准确率、Android 28 与 36 运行、字典体积、内存、初始化耗时和许可证。Java 方案可以直接接入当前接口，MeCab 需要独立 JNI/NDK 模块。
 
@@ -12,9 +12,9 @@
 
 ## TextView Ruby 排版
 
-`RubyRenderer` 和 `RubyStyle` 定义了独立的渲染输入与样式接口。先在测试应用中完成真实词元到可交互注音的端到端验证，然后接入宿主 Hook。验收覆盖自动换行、行高、字号、基线、相邻注音间距、已有 spans、点击、选择、复制、可访问性及 RecyclerView 复用。
+`RubyTextRenderer` 和 `RubySpan` 已实现原地 Spannable 注音，并通过独立测试应用和宿主 Hook 接入。后续排版验收继续扩展跨行整词、词内选择、复制、可访问性、动态字体属性和运行期间的 span 变化。
 
-[ReplacementSpan 官方接口](https://developer.android.com/reference/android/text/style/ReplacementSpan)提供宽度测量、FontMetrics 与绘制能力；需要实测覆盖段跨行、宽度扩张、span 组合与选择行为。当前阶段没有 RubySpan 实现，不承诺单个 ReplacementSpan 可以解决完整排版。
+[ReplacementSpan 官方接口](https://developer.android.com/reference/android/text/style/ReplacementSpan)提供宽度测量、FontMetrics 与绘制能力。当前实现以完整词段作为原子排版单位，跳过超宽词与内部样式边界；跨行读音和词内交互需要独立布局研究。
 
 渲染状态需要与宿主业务文本和 View 生命周期分离，使用版本标识丢弃过时后台结果，防止修改事件递归、重复布局和复用 View 接收旧文本的注音。系统组件和输入控件继续执行明确的跳过规则。
 
@@ -30,4 +30,4 @@ WebView 继承 AbsoluteLayout，HTML 文本由浏览器排版。独立适配层�
 
 应用作用域继续由 LSPosed 管理器控制；配置界面增加注音等级、样式与日志开关。跨进程配置必须采用经过核实的官方服务或明确的 Android IPC，确保宿主进程读取配置的成本有限。
 
-具备 API 102 的 LSPosed 测试设备后，验证模块识别、注入、日志、敏感输入跳过、原方法异常、进程重启与各宿主版本。保留 APK SHA-256、工具链、设备/API/框架版本、作用域、实际日志和可重复执行的测试报告。构建、普通模拟器运行与 LSPosed Hook 执行分别记录。
+继续使用 Windows Vector API 102 专用设备验证模块注入、真实注音、敏感输入保护、原方法异常、进程重启与各宿主版本，并补充物理设备和其他框架发行版。保留 APK SHA-256、工具链、设备/API/框架版本、作用域、实际日志和可重复执行的测试报告。构建、普通模拟器运行与 Hook 执行分别记录。

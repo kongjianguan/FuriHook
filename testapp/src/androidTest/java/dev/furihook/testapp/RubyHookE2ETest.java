@@ -128,10 +128,10 @@ public final class RubyHookE2ETest {
                 assertNoRuby(activity.findViewById(MainActivity.ID_PASSWORD));
                 EditText password = activity.findViewById(MainActivity.ID_PASSWORD);
                 assertEquals("秘密の文字", password.getText().toString());
-                assertRuby(activity.findViewById(charArrayViewId[0]).getText(), japaneseExpectations());
-                assertRuby(activity.findViewById(spannableViewId[0]).getText(), japaneseExpectations());
-                assertRuby(activity.findViewById(immutableViewId[0]).getText(), japaneseExpectations());
-                assertSame(precomputedValue[0], activity.findViewById(precomputedViewId[0]).getText());
+                assertRuby(activity.<TextView>findViewById(charArrayViewId[0]).getText(), japaneseExpectations());
+                assertRuby(activity.<TextView>findViewById(spannableViewId[0]).getText(), japaneseExpectations());
+                assertRuby(activity.<TextView>findViewById(immutableViewId[0]).getText(), japaneseExpectations());
+                assertSame(precomputedValue[0], activity.<TextView>findViewById(precomputedViewId[0]).getText());
 
                 View dynamicButton = activity.findViewById(MainActivity.ID_DYNAMIC_BUTTON);
                 assertTrue(dynamicButton.performClick());
