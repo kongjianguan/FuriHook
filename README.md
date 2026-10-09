@@ -56,7 +56,7 @@ Debug 构建默认启用检测日志，可使用以下命令关闭；Release 构
 优先使用仓库的 GitHub Actions。每次 push、pull request 或手动触发 `Android verification` 时，云端执行：
 
 ```bash
-./gradlew :app:assembleDebug :testapp:assembleDebug :core:test :app:lintDebug :testapp:lintDebug
+./gradlew :app:assembleDebug :testapp:assembleDebug :testapp:assembleDebugAndroidTest :core:test :app:lintDebug :testapp:lintDebug
 ```
 
 随后检查 APK 中的 `java_init.list`、`module.prop`、`scope.list`、入口类、SDK 版本和网络权限，确认 libxposed API 类没有被打包。API 28 和 36 的真实 Android 模拟器运行：
@@ -75,18 +75,34 @@ APK 标准输出路径：
 
 - `app/build/outputs/apk/debug/app-debug.apk`
 - `testapp/build/outputs/apk/debug/testapp-debug.apk`
+- `testapp/build/outputs/apk/androidTest/debug/testapp-debug-androidTest.apk`
+
+## Windows 远程模拟器
+
+`scripts/start_windows_emulator.ps1` 使用 Windows 上的官方 Android Emulator、WHPX 和 `system-images;android-35;default;x86_64` 创建独立的 `FuriHook_API35` 虚拟设备。脚本检查加速能力，使用端口 5580，通过计划任务运行 `windows_emulator_worker.ps1` 并等待启动完成。计划任务需要 Windows 用户已经登录。SDK、Java 和工作目录可以通过参数指定；`-Ramdisk` 可以指定独立的启动镜像副本；现有虚拟设备保持原状。
+
+将云端构建的三个 APK 放入 `D:\workspace\furihook-validation`，执行：
+
+```powershell
+pwsh -NoProfile -File scripts/start_windows_emulator.ps1
+pwsh -NoProfile -File scripts/test_windows_emulator.ps1
+```
+
+测试脚本安装 APK，执行相同的六个 instrumentation 场景，检查模块界面 XML，并保存 APK SHA-256、测试输出和验证 JSON 到工作目录的 `results/`。完成后可通过 SDK 中的 `adb -s emulator-5580 emu kill` 关闭该测试设备。
+
+专用设备已经安装 [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) 与 [Vector v2.2](https://github.com/JingMatrix/Vector/releases/tag/v2.2)。Vector 属于 LSPosed 系谱的独立项目，实现 libxposed API 102。`scripts/verify_windows_hooks.ps1` 检查框架 API、模块启用状态与作用域，在真实 Hook 状态下运行六个应用测试，再检查模块初始化、一次 Hook 注册、四种文本候选结果、输入保护和日志原文长度。实际结果及复验方法见 [设备验证](docs/DEVICE_VALIDATION.md)。
 
 ## LSPosed 验证
 
 1. 安装两个 Debug APK。
 2. 在支持 libxposed API 102 的 LSPosed 管理器中启用 FuriHook。
 3. 选择默认作用域 `dev.furihook.testapp`，终止并重新启动测试应用。
-4. 在 LSPosed 模块日志中筛选 `FuriHook`，检查 `module_loaded`、`hook_registered` 和 `text_observed`。
+4. 通过框架日志或 `adb logcat -s FuriHook:I` 检查 `module_loaded`、`hook_registered` 和 `text_observed`。Vector v2.2 的 Modern API 日志写入 Logcat。
 5. 更新动态文本，滚动列表，点击富文本并选择文字，确认宿主显示与交互保持正常。密码与输入框不应产生文本观测。
 
 作用域通过 LSPosed 管理器选择，`staticScope=false` 允许选择其他普通应用。本阶段跳过系统应用。启用作用域或更新 APK 后需要重新启动目标进程；自动热重载关闭。
 
-Android 模拟器验证覆盖安装、界面与测试应用运行。普通模拟器没有 LSPosed，实际注入、管理器识别与 Hook 日志仍需要 API 102 的 LSPosed 设备验证。模块界面不提供未经证实的激活状态。
+云端模拟器验证覆盖安装、界面与测试应用运行；Windows 的 API 35 专用模拟器同时验证 Vector API 102 的实际注入与 Hook 日志。框架版本及厂商 Android 差异需要在相应设备上验证。模块界面不提供激活状态。
 
 ## 覆盖边界
 
