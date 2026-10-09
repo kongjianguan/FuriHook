@@ -35,6 +35,7 @@ public final class MainActivity extends Activity {
     public static final int ID_EDITABLE = 1011;
     public static final int ID_PASSWORD = 1012;
     public static final int ID_RECYCLER = 1013;
+    public static final int ID_DYNAMIC_BUTTON = 1014;
     public static final int ITEM_COUNT = 120;
 
     private static final long PERIOD_MS = 1_000L;
@@ -136,7 +137,7 @@ public final class MainActivity extends Activity {
         dynamicText = addSample(content, "手动动态文本", ID_DYNAMIC, "动态更新前：今日は晴れです。");
         Button updateButton = new Button(this);
         updateButton.setText("手动更新文本");
-        updateButton.setId(View.generateViewId());
+        updateButton.setId(ID_DYNAMIC_BUTTON);
         updateButton.setTag("dynamic_update_button");
         updateButton.setOnClickListener(view -> {
             dynamicCount++;

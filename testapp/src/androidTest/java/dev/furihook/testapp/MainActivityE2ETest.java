@@ -40,7 +40,9 @@ public final class MainActivityE2ETest {
     public void dynamicButtonChangesTextAndCounter() {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             scenario.onActivity(activity -> {
-                activity.findViewWithTag("dynamic_update_button").performClick();
+                android.view.View updateButton = activity.findViewById(MainActivity.ID_DYNAMIC_BUTTON);
+                assertNotNull(updateButton);
+                assertTrue(updateButton.performClick());
                 assertEquals(1, activity.dynamicCount());
                 assertTrue(text(activity, MainActivity.ID_DYNAMIC).contains("第 1 次"));
             });

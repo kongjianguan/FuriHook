@@ -30,7 +30,7 @@ jobs:
       - name: Install Android SDK components
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - name: Build and run unit tests and lint
-        run: ./gradlew :app:assembleDebug :testapp:assembleDebug :core:test :app:lintDebug :testapp:lintDebug --stacktrace
+        run: ./gradlew :app:assembleDebug :testapp:assembleDebug :testapp:assembleDebugAndroidTest :core:test :app:lintDebug :testapp:lintDebug --stacktrace
       - name: Verify packaged Modern API metadata
         run: |
           python3 -m venv work/verification-venv
@@ -44,6 +44,7 @@ jobs:
           path: |
             app/build/outputs/apk/debug/*.apk
             testapp/build/outputs/apk/debug/*.apk
+            testapp/build/outputs/apk/androidTest/debug/*.apk
             core/build/test-results/test/
             core/build/reports/tests/test/
             app/build/reports/lint-results-debug.*
@@ -98,4 +99,4 @@ jobs:
             testapp/build/reports/androidTests/connected/
             testapp/build/outputs/androidTest-results/connected/
             work/e2e/
-          if-no-files-found: error
+          if-no-files-found: warn
