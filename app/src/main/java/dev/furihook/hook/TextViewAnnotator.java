@@ -267,7 +267,8 @@ final class TextViewAnnotator {
         Spannable text = (Spannable) view.getText();
         List<RubySegment> fitting = new ArrayList<>();
         for (RubySegment segment : result.segments) {
-            TextPaint paint = new TextPaint(view.getPaint());
+            TextPaint paint = new TextPaint();
+            paint.set(view.getPaint());
             MetricAffectingSpan[] metrics = text.getSpans(segment.getStartUtf16(),
                     segment.getEndUtf16(), MetricAffectingSpan.class);
             for (MetricAffectingSpan span : metrics) {

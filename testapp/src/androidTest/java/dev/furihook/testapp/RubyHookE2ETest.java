@@ -13,6 +13,7 @@ import android.text.SpannableString;
 import android.text.Spanned;
 import android.text.SpannedString;
 import android.text.style.ClickableSpan;
+import android.text.style.AbsoluteSizeSpan;
 import android.text.style.ReplacementSpan;
 import android.view.MotionEvent;
 import android.view.View;
@@ -49,9 +50,20 @@ public final class RubyHookE2ETest {
             int[] spannableViewId = new int[1];
             int[] immutableViewId = new int[1];
             int[] precomputedViewId = new int[1];
+            int[] oversizedViewId = new int[1];
             PrecomputedText[] precomputedValue = new PrecomputedText[1];
             scenario.onActivity(activity -> {
                 LinearLayout content = content(activity);
+                TextView oversizedView = newTestView(activity, content);
+                oversizedViewId[0] = oversizedView.getId();
+                oversizedView.setLayoutParams(new LinearLayout.LayoutParams(
+                        Math.round(120f * activity.getResources().getDisplayMetrics().density),
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+                SpannableString oversizedSource = new SpannableString("学校");
+                oversizedSource.setSpan(new AbsoluteSizeSpan(80, true), 0, 2,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                oversizedView.setText(oversizedSource, TextView.BufferType.SPANNABLE);
+
                 TextView charArrayView = newTestView(activity, content);
                 charArrayViewId[0] = charArrayView.getId();
                 charArrayView.setText(new SpannableString("準備テキスト"), TextView.BufferType.SPANNABLE);
@@ -132,6 +144,11 @@ public final class RubyHookE2ETest {
                 assertRuby(activity.<TextView>findViewById(spannableViewId[0]).getText(), japaneseExpectations());
                 assertRuby(activity.<TextView>findViewById(immutableViewId[0]).getText(), japaneseExpectations());
                 assertSame(precomputedValue[0], activity.<TextView>findViewById(precomputedViewId[0]).getText());
+                TextView oversizedView = activity.findViewById(oversizedViewId[0]);
+                assertEquals("学校", oversizedView.getText().toString());
+                assertNoRuby(oversizedView);
+                assertEquals(1, ((Spanned) oversizedView.getText())
+                        .getSpans(0, 2, AbsoluteSizeSpan.class).length);
 
                 View dynamicButton = activity.findViewById(MainActivity.ID_DYNAMIC_BUTTON);
                 assertTrue(dynamicButton.performClick());

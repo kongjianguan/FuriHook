@@ -146,7 +146,7 @@ public final class RubyRendererE2ETest {
                         + normal.getLayout().getLineBaseline(0);
                 int superscriptBaseline = superscript.getExtendedPaddingTop()
                         + superscript.getLayout().getLineBaseline(0);
-                TextPaint expectedSuperPaint = new TextPaint(superscript.getPaint());
+                TextPaint expectedSuperPaint = copyTextPaint(superscript.getPaint());
                 SuperscriptSpan[] superSpans = ((Spanned) superscript.getText())
                         .getSpans(0, superscript.length(), SuperscriptSpan.class);
                 assertEquals(1, superSpans.length);
@@ -247,7 +247,7 @@ public final class RubyRendererE2ETest {
                 assertEquals(2, ((Spanned) narrow.getText()).getSpanEnd(span));
                 assertEquals("ちょうぶんのよみかた", span.getRubyText());
                 Paint.FontMetricsInt metrics = new Paint.FontMetricsInt();
-                TextPaint basePaint = new TextPaint(narrow.getPaint());
+                TextPaint basePaint = copyTextPaint(narrow.getPaint());
                 basePaint.getFontMetricsInt(metrics);
                 int baseAscent = metrics.ascent;
                 int requiredWidth = span.getSize(basePaint,
@@ -398,11 +398,11 @@ public final class RubyRendererE2ETest {
         assertTrue(view.getWidth() > 0 && view.getHeight() > 0);
         Bitmap bitmap = Bitmap.createBitmap(view.getWidth(), view.getHeight(), Bitmap.Config.ARGB_8888);
         try {
-            TextPaint viewPaintBeforeDraw = new TextPaint(view.getPaint());
+            TextPaint viewPaintBeforeDraw = copyTextPaint(view.getPaint());
             int scrollXBeforeDraw = view.getScrollX();
             int scrollYBeforeDraw = view.getScrollY();
             view.draw(new Canvas(bitmap));
-            TextPaint viewPaintAfterDraw = new TextPaint(view.getPaint());
+            TextPaint viewPaintAfterDraw = copyTextPaint(view.getPaint());
             RubySpan ruby = rubySpans(view.getText())[0];
             Spanned text = (Spanned) view.getText();
             int start = text.getSpanStart(ruby);
@@ -468,7 +468,7 @@ public final class RubyRendererE2ETest {
     }
 
     private static TextPaint styledPaint(TextView view, int start, int end) {
-        TextPaint paint = new TextPaint(view.getPaint());
+        TextPaint paint = copyTextPaint(view.getPaint());
         Spanned text = (Spanned) view.getText();
         for (android.text.style.CharacterStyle style :
                 text.getSpans(start, end, android.text.style.CharacterStyle.class)) {
@@ -477,6 +477,12 @@ public final class RubyRendererE2ETest {
             }
         }
         return paint;
+    }
+
+    private static TextPaint copyTextPaint(TextPaint source) {
+        TextPaint result = new TextPaint();
+        result.set(source);
+        return result;
     }
 
     private static String paintDescription(TextPaint paint) {
@@ -495,7 +501,7 @@ public final class RubyRendererE2ETest {
         int end = text.getSpanEnd(span);
         TextPaint paint = styledPaint(view, start, end);
         Paint.FontMetricsInt metrics = new Paint.FontMetricsInt();
-        TextPaint measurePaint = new TextPaint(paint);
+        TextPaint measurePaint = copyTextPaint(paint);
         int baselineShift = measurePaint.baselineShift;
         measurePaint.baselineShift = 0;
         span.getSize(measurePaint, text, start, end, metrics);
