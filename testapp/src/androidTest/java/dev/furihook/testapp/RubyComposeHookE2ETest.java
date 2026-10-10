@@ -57,6 +57,7 @@ public final class RubyComposeHookE2ETest {
             JSONArray[] initialRuby = new JSONArray[1];
             JSONArray[] updatedRuby = new JSONArray[1];
             JSONArray[] longRuby = new JSONArray[1];
+            JSONArray[] multiRuby = new JSONArray[1];
             JSONArray[] linkRanges = new JSONArray[1];
             int[] initialLines = new int[1];
             int[] longLines = new int[1];
@@ -90,6 +91,40 @@ public final class RubyComposeHookE2ETest {
                 Spanned longText = spanned(paragraphCharSequence(longResult));
                 assertTrue("真实长文本布局必须包含 RubySpan", !rubySpans(longText).isEmpty());
                 longRuby[0] = rubyJsonUnchecked(longText);
+
+                List<?> paragraphInfos = (List<?>) invoke(activity.multiLayout().getMultiParagraph(),
+                        "getParagraphInfoList$ui_text");
+                assertEquals("两个段落样式必须创建两个实际 AndroidParagraph", 2, paragraphInfos.size());
+                multiRuby[0] = new JSONArray();
+                for (int index = 0; index < paragraphInfos.size(); index++) {
+                    Object paragraph = invoke(paragraphInfos.get(index), "getParagraph");
+                    Spanned text = spanned((CharSequence) invoke(paragraph, "getCharSequence$ui_text"));
+                    if (index == 0) {
+                        assertEquals("今日は学校。\n", text.toString());
+                        assertRuby(text, new Expected[] {
+                                new Expected(0, 2, "今日", "きょう", "きょう"),
+                                new Expected(3, 5, "学校", "がっこう", "がっこう")});
+                    } else {
+                        assertEquals("明日は図書館。", text.toString());
+                        assertRuby(text, new Expected[] {
+                                new Expected(0, 2, "明日", "あした", "あした"),
+                                new Expected(3, 6, "図書館", "としょかん", "としょかん")});
+                    }
+                    android.text.TextPaint paint = (android.text.TextPaint) invoke(paragraph,
+                            "getTextPaint$ui_text");
+                    float baseline = ((Number) invoke(paragraph, "getLineBaseline",
+                            new Class<?>[] {int.class}, 0)).floatValue();
+                    float top = ((Number) invoke(paragraph, "getLineTop",
+                            new Class<?>[] {int.class}, 0)).floatValue();
+                    for (Object span : rubySpans(text)) {
+                        Paint.FontMetricsInt metrics = paint.getFontMetricsInt();
+                        invoke(span, "getSize", new Class<?>[] {Paint.class, CharSequence.class,
+                                int.class, int.class, Paint.FontMetricsInt.class}, paint, text,
+                                text.getSpanStart(span), text.getSpanEnd(span), metrics);
+                        assertTrue("固定行高的段落必须保留 Ruby 顶部空间", baseline + metrics.ascent >= top - 1f);
+                    }
+                    multiRuby[0].put(rubyJsonUnchecked(text));
+                }
 
                 String englishKana = simpleCharSequence(activity.findViewById(
                         ComposeRubyFixtureActivity.ID_ENGLISH)).toString();
@@ -150,6 +185,8 @@ public final class RubyComposeHookE2ETest {
             evidence.put("updatedRuby", updatedRuby[0]);
             evidence.put("longTextLineCount", longLines[0]);
             evidence.put("longTextRuby", longRuby[0]);
+            evidence.put("multiParagraphRuby", multiRuby[0]);
+            evidence.put("explicitLineHeightsSp", new JSONArray().put(24).put(26));
             evidence.put("englishKanaExcluded", excludedRuby[0]);
             evidence.put("linkRange", linkRanges[0]);
             evidence.put("linkClickCount", 1);
@@ -166,7 +203,9 @@ public final class RubyComposeHookE2ETest {
             boolean[] ready = new boolean[1];
             scenario.onActivity(activity -> {
                 TextLayoutResult rich = activity.richLayout();
-                ready[0] = rich != null && activity.longLayout() != null
+                TextLayoutResult multi = activity.multiLayout();
+                ready[0] = rich != null && activity.longLayout() != null && multi != null
+                        && allParagraphsHaveRuby(multi)
                         && !rubySpans(paragraphCharSequence(rich)).isEmpty()
                         && !rubySpans(simpleCharSequence(activity.findViewById(
                                 ComposeRubyFixtureActivity.ID_SIMPLE))).isEmpty()
@@ -186,6 +225,16 @@ public final class RubyComposeHookE2ETest {
         assertTrue("Compose 实际布局必须包含段落", !infos.isEmpty());
         Object paragraph = invoke(infos.get(0), "getParagraph");
         return (CharSequence) invoke(paragraph, "getCharSequence$ui_text");
+    }
+
+    private static boolean allParagraphsHaveRuby(TextLayoutResult result) {
+        List<?> infos = (List<?>) invoke(result.getMultiParagraph(), "getParagraphInfoList$ui_text");
+        if (infos.size() != 2) return false;
+        for (Object info : infos) {
+            CharSequence text = (CharSequence) invoke(invoke(info, "getParagraph"), "getCharSequence$ui_text");
+            if (rubySpans(text).isEmpty()) return false;
+        }
+        return true;
     }
 
     private static CharSequence simpleCharSequence(ComposeView composeView) {

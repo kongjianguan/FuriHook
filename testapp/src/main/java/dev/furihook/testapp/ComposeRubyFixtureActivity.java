@@ -17,9 +17,16 @@ import androidx.compose.ui.platform.ComposeView;
 import androidx.compose.ui.text.AnnotatedString;
 import androidx.compose.ui.text.LinkAnnotation;
 import androidx.compose.ui.text.TextLayoutResult;
+import androidx.compose.ui.text.ParagraphStyle;
+import androidx.compose.ui.text.PlatformParagraphStyle;
 import androidx.compose.ui.text.TextStyle;
+import androidx.compose.ui.text.style.LineHeightStyle;
+import androidx.compose.ui.text.style.TextIndent;
+import androidx.compose.ui.text.style.TextMotion;
+import androidx.compose.ui.unit.TextUnitKt;
 
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.Map;
@@ -34,12 +41,15 @@ public final class ComposeRubyFixtureActivity extends ComponentActivity {
     public static final int ID_LONG = 2103;
     public static final int ID_ENGLISH = 2104;
     public static final int ID_UPDATE = 2105;
+    public static final int ID_MULTIPARAGRAPH = 2106;
     public static final String ORIGINAL = "今日は学校で日本語を勉強します。";
     public static final String UPDATED = "明日は図書館へ行きます。";
+    public static final String MULTIPARAGRAPH = "今日は学校。\n明日は図書館。";
 
     private ComposeView richView;
     private TextLayoutResult richLayout;
     private TextLayoutResult longLayout;
+    private TextLayoutResult multiLayout;
     private AnnotatedString richSource;
     private int linkClicks;
 
@@ -69,6 +79,18 @@ public final class ComposeRubyFixtureActivity extends ComponentActivity {
             renderAnnotated(longSource, result -> { longLayout = result; return Unit.INSTANCE; }, composer);
             return Unit.INSTANCE;
         });
+        ComposeView multiView = addView(column, ID_MULTIPARAGRAPH);
+        AnnotatedString.Builder multiBuilder = new AnnotatedString.Builder(MULTIPARAGRAPH);
+        int paragraphBoundary = MULTIPARAGRAPH.indexOf('\n') + 1;
+        multiBuilder.addStyle(fixedLineHeightParagraphStyle(24f), 0, paragraphBoundary);
+        multiBuilder.addStyle(fixedLineHeightParagraphStyle(26f), paragraphBoundary,
+                MULTIPARAGRAPH.length());
+        AnnotatedString multiSource = multiBuilder.toAnnotatedString();
+        multiView.setContent((composer, flags) -> {
+            renderAnnotated(multiSource,
+                    result -> { multiLayout = result; return Unit.INSTANCE; }, composer);
+            return Unit.INSTANCE;
+        });
         addSimple(column, ID_ENGLISH, "English only. ひらがなだけです。");
         Button update = new Button(this);
         update.setId(ID_UPDATE);
@@ -79,6 +101,7 @@ public final class ComposeRubyFixtureActivity extends ComponentActivity {
 
     public TextLayoutResult richLayout() { return richLayout; }
     public TextLayoutResult longLayout() { return longLayout; }
+    public TextLayoutResult multiLayout() { return multiLayout; }
     public AnnotatedString richSource() { return richSource; }
     public int linkClicks() { return linkClicks; }
 
@@ -113,6 +136,22 @@ public final class ComposeRubyFixtureActivity extends ComponentActivity {
                     null, 1, true, Integer.MAX_VALUE, 1, null, null, composer, 0, 0);
             return Unit.INSTANCE;
         });
+    }
+
+    private static ParagraphStyle fixedLineHeightParagraphStyle(float lineHeightSp) {
+        try {
+            Constructor<ParagraphStyle> constructor = ParagraphStyle.class.getDeclaredConstructor(
+                    int.class, int.class, long.class, TextIndent.class,
+                    PlatformParagraphStyle.class, LineHeightStyle.class, int.class, int.class,
+                    TextMotion.class, int.class,
+                    kotlin.jvm.internal.DefaultConstructorMarker.class);
+            constructor.setAccessible(true);
+            return constructor.newInstance(0, 0, TextUnitKt.getSp(lineHeightSp), null, null, null,
+                    0, 0, null, 507, null);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("Compose 1.10.6 ParagraphStyle JVM signature changed",
+                    failure);
+        }
     }
 
     private static void renderAnnotated(AnnotatedString text,
