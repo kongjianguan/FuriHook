@@ -30,7 +30,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import dev.furihook.BuildConfig;
 import dev.furihook.config.DetectionConfig;
 import dev.furihook.engine.JapaneseDetector;
-import dev.furihook.engine.KuromojiReadingEngine;
 import dev.furihook.engine.ReadingEngine;
 import dev.furihook.engine.RubySegment;
 import dev.furihook.renderer.RubySpan;
@@ -54,16 +53,17 @@ final class TextViewAnnotator {
     private final WindowRateLimiter applicationLogs = new WindowRateLimiter(DetectionConfig.LOGS_PER_SECOND);
     private final AtomicLong skipped = new AtomicLong();
     private final RubyTextRenderer renderer = new RubyTextRenderer();
-    private final ReadingEngine engine = new KuromojiReadingEngine();
+    private final ReadingEngine engine;
     private final LinkedHashMap<String, List<RubySegment>> cache = new LinkedHashMap<>(16, 0.75f, true);
     private final ThreadPoolExecutor worker;
     private boolean draining;
     private boolean analysisDisabled;
 
-    TextViewAnnotator(ModuleLog log, String packageName, String processName) {
+    TextViewAnnotator(ModuleLog log, String packageName, String processName, ReadingEngine engine) {
         this.log = log;
         this.packageName = packageName;
         this.processName = processName;
+        this.engine = engine;
         worker = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(1), runnable -> {
                     Thread thread = new Thread(runnable, "FuriHook-reading");

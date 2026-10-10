@@ -37,7 +37,7 @@ Invoke-Device @('shell', 'uiautomator', 'dump', '/sdcard/furihook-module-ui.xml'
 Invoke-Device @('pull', '/sdcard/furihook-module-ui.xml', "$outputDirectory\module-ui.xml") | Out-Null
 [xml]$tree = Get-Content "$outputDirectory\module-ui.xml" -Raw -Encoding utf8
 $texts = @($tree.SelectNodes('//node') | ForEach-Object { $_.GetAttribute('text') })
-foreach ($expected in @('FuriHook 0.2.0', '阶段二 · TextView 本地振假名', '测试方法')) {
+foreach ($expected in @('FuriHook 0.3.0', 'TextView · Compose · WebView 本地振假名', '测试方法')) {
     if ($expected -notin $texts) { throw "模块界面缺少内容：$expected" }
 }
 $crashes = Invoke-Device @('logcat', '-d', '-b', 'crash')

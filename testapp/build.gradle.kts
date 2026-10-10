@@ -29,6 +29,9 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":ruby"))
     implementation("androidx.recyclerview:recyclerview:1.4.0")
+    implementation("androidx.activity:activity:1.10.1")
+    implementation("androidx.compose.foundation:foundation:1.10.6")
+    implementation("androidx.compose.ui:ui:1.10.6")
 
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test:core:1.7.0")

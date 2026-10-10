@@ -34,6 +34,10 @@ def inspect_apk(apk, analyzer, output):
                 raise AssertionError(f"模块元数据错误：{name}")
         if "assets/xposed_init" in archive.namelist():
             raise AssertionError("APK 包含旧版入口")
+        web_script = archive.read("assets/furihook-web.js")
+        if not web_script or b"createElement(\"ruby\")" not in web_script:
+            raise AssertionError("APK 缺少 WebView Ruby 脚本")
+        web_script_digest = hashlib.sha256(web_script).hexdigest()
         dictionary_bytes = 0
         for name in dictionary_files:
             entry = archive.getinfo("com/atilika/kuromoji/ipadic/" + name)
@@ -87,6 +91,7 @@ def inspect_apk(apk, analyzer, output):
         "uncompressedDictionaryBytes": dictionary_bytes,
         "legalNoticesSha256": legal_files,
         "legacyEntry": False,
+        "webViewScriptSha256": web_script_digest,
         "hookExecutionVerified": False,
     }
     (output / "apk-verification.json").write_text(

@@ -24,6 +24,6 @@ public final class FuriHookModule extends XposedModule {
     @Override
     public void onPackageReady(PackageReadyParam param) {
         // API 28 在此接收包就绪事件；注册器保证每个进程只注册一次。
-        registry.onPackage(param);
+        registry.onReady(param);
     }
 }

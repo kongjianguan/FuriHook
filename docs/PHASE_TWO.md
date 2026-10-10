@@ -20,11 +20,11 @@
 
 ## WebView
 
-WebView 继承 AbsoluteLayout，HTML 文本由浏览器排版。独立适配层研究 DOM 文本节点、本地读音处理以及 `<ruby><rt>`，需要限定来源、iframe 权限、脚本桥访问、动态 DOM 更新与重复注入规则。编辑区域、密码字段、脚本和样式节点需要排除。WebView 数据不通过远程服务处理。
+WebView 主文档已经通过 DOM 文本节点、本地读音处理和标准 HTML Ruby 适配，动态变化使用 MutationObserver。继续扩展 iframe、Shadow DOM、浏览器内核差异与页面改变可编辑属性时的处理；保持有界批次、导航版本检查及复制原文。编辑区域、密码字段、脚本和样式节点继续排除。
 
 ## Compose
 
-[Compose 官方文本文档](https://developer.android.com/develop/ui/compose/text)描述 `Text`、`BasicText` 和可编辑文本组件。独立适配层需要实测不同 Compose 版本的文本布局入口与源码变化，验证 AnnotatedString 样式、重组、选择、点击、语义和布局节点复用。当前 TextView Hook 无法覆盖独立的 Compose 排版。
+Compose 适配已依据 1.10.6 官方源码和实际 AAR 检查节点测量、文本转换与布局缓存失效入口。继续检查真实宿主版本、被混淆的内部类、字体与固定行高、选择和节点复用。新的入口以宿主源码或 APK 字节码和端到端结果为依据；当前验证方法见 [适配实现](ADAPTERS.md)。
 
 ## 配置与设备验收
 

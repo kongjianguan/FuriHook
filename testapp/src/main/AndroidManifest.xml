@@ -11,5 +11,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".WebViewRubyFixtureActivity"
+            android:exported="false" />
+        <activity android:name=".ComposeRubyFixtureActivity" android:exported="false" />
     </application>
 </manifest>

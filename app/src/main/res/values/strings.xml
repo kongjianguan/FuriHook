@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">FuriHook</string>
-    <string name="module_description">本地日语 Ruby 注音模块：TextView 词语读音与振假名</string>
-    <string name="stage_title">阶段二 · TextView 本地振假名</string>
-    <string name="stage_description">使用本地 Kuromoji IPADIC 词典分析词语读音，将平假名显示在汉字上方。后台处理结果原地添加到 Spannable，原文字符保持完整。包含汉字无法单独确认语言。</string>
+    <string name="module_description">本地日语 Ruby 注音模块：TextView、Compose 与 WebView</string>
+    <string name="stage_title">TextView · Compose · WebView 本地振假名</string>
+    <string name="stage_description">使用本地 Kuromoji IPADIC 词典分析词语读音，将平假名显示在汉字上方。TextView 和支持的 Compose 文本布局使用 RubySpan，WebView 页面使用 HTML Ruby。读音分析在后台完成，原文字符保持完整。包含汉字无法单独确认语言。</string>
     <string name="test_title">测试方法</string>
-    <string name="test_instructions">1. 安装 FuriHook 和 FuriHook Test。\n2. 在支持 libxposed API 102 的 LSPosed 管理器中启用模块。\n3. 选择 dev.furihook.testapp 作用域，重新启动测试应用。\n4. 查看静态文本、动态更新、RecyclerView 和富文本样例。模块界面无法确认实际激活状态。</string>
+    <string name="test_instructions">1. 安装 FuriHook 和 FuriHook Test。\n2. 在支持 libxposed API 102 的 LSPosed 管理器中启用模块。\n3. 选择目标应用作用域，重新启动目标进程。\n4. 测试应用默认作用域为 dev.furihook.testapp，可打开 Compose 和 WebView 样例。模块界面无法确认实际激活状态。</string>
     <string name="log_title">日志查看</string>
     <string name="log_instructions">通过 adb logcat -s FuriHook:I 查看日志。hook_registered 表示注册成功；text_observed 表示候选检测完成；ruby_applied 表示注音范围已经添加。\n\n调试构建默认启用检测日志，日志包含长度、候选结果和注音数量，原文长度为零。正式构建关闭检测日志。输入框、密码控件、预计算文本与文本转换控件跳过注音。高频更新会合并为最新文本。</string>
     <string name="future_title">后续功能</string>
-    <string name="future_description">更多词典与读音质量评估\n复杂样式、整词选择与跨行注音\n独立 Compose 文本适配\nWebView DOM 与 HTML Ruby\n注音等级和显示样式设置</string>
+    <string name="future_description">更多词典与读音质量评估\n复杂样式、整词选择与跨行注音\n更多宿主 Compose 版本与混淆结构验证\nWebView iframe 和 Shadow DOM\n注音等级和显示样式设置</string>
 </resources>

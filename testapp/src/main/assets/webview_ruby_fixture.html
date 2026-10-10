@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FuriHook WebView Ruby Fixture</title>
+  <style>
+    body { font: 20px sans-serif; padding: 16px; }
+    p, a, button, input, [contenteditable] { display: block; margin: 14px 0; }
+    ruby { ruby-position: over; }
+    rt { font-size: 0.5em; }
+  </style>
+</head>
+<body>
+  <button id="dynamic-button" type="button">动态更新</button>
+  <button id="copy-button" type="button">复制正文</button>
+  <p id="plain">今日は学校。</p>
+  <p id="dynamic">明日は図書館。</p>
+  <a id="link" href="#link-result">日本語のリンク</a>
+  <p id="link-result">未点击</p>
+  <p id="editable" contenteditable="true">今日は学校。</p>
+  <input id="password" type="password" value="今日は学校。">
+  <p id="existing"><ruby data-fixture-existing="true"><rb>今日</rb><rt>きょう</rt></ruby>は学校。</p>
+  <p id="copy-source">今日は学校。</p>
+  <script>
+    window.fixtureState = { dynamicRevision: 0, copyEvents: 0 };
+    document.addEventListener('copy', function () {
+      window.fixtureState.copyEvents += 1;
+    }, true);
+    document.getElementById('dynamic-button').addEventListener('click', function () {
+      window.fixtureState.dynamicRevision += 1;
+      document.getElementById('dynamic').textContent = '今日は学校。';
+    });
+    document.getElementById('link').addEventListener('click', function (event) {
+      event.preventDefault();
+      document.getElementById('link-result').textContent = 'clicked';
+    });
+    document.getElementById('copy-button').addEventListener('click', function () {
+      const source = document.getElementById('copy-source');
+      const range = document.createRange();
+      range.selectNodeContents(source);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand('copy');
+      selection.removeAllRanges();
+    });
+  </script>
+</body>
+</html>

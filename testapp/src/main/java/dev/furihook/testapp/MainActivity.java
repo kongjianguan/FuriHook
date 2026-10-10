@@ -1,6 +1,7 @@
 package dev.furihook.testapp;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
@@ -121,6 +122,16 @@ public final class MainActivity extends Activity {
         });
 
         addHeading(content, "FuriHook Android 测试应用");
+        Button webViewFixture = new Button(this);
+        webViewFixture.setText("打开 WebView 注音测试页");
+        webViewFixture.setOnClickListener(view -> startActivity(
+                new Intent(this, WebViewRubyFixtureActivity.class)));
+        content.addView(webViewFixture);
+        Button composeFixture = new Button(this);
+        composeFixture.setText("打开 Compose 注音测试页");
+        composeFixture.setOnClickListener(view -> startActivity(
+                new Intent(this, ComposeRubyFixtureActivity.class)));
+        content.addView(composeFixture);
         addSample(content, "普通日语", ID_JAPANESE, "今日は学校で日本語を勉強します。");
         addSample(content, "中日混合", ID_MIXED, "東京駅で咖啡を飲みます。混合内容：中文、日本語。");
         addSample(content, "纯平假名", ID_HIRAGANA, "ひらがなだけのぶんしょうです。");

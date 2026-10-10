@@ -47,10 +47,14 @@ foreach ($event in @('module_loaded', 'hook_registered', 'text_observed', 'ruby_
     if (@($testEvents | Where-Object event -eq $event).Count -eq 0) { throw "instrumentation 期间缺少 Hook 事件：$event" }
 }
 if (@($testEvents | Where-Object event -Match 'failed').Count -ne 0) { throw 'instrumentation 期间 Hook 日志报告错误' }
-$hookOutput = Invoke-Device @('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', 'dev.furihook.testapp.RubyHookE2ETest', 'dev.furihook.testapp.test/androidx.test.runner.AndroidJUnitRunner')
+$hookClasses = 'dev.furihook.testapp.RubyHookE2ETest,dev.furihook.testapp.RubyWebViewHookE2ETest,dev.furihook.testapp.RubyComposeHookE2ETest'
+$hookOutput = Invoke-Device @('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', $hookClasses, '-e', 'requireFuriHook', 'true', 'dev.furihook.testapp.test/androidx.test.runner.AndroidJUnitRunner')
 $hookOutput | Set-Content "$outputDirectory\ruby-hook-instrumentation.txt" -Encoding utf8
 $hookText = $hookOutput -join "`n"
-if (-not $hookText.Contains('OK (1 test)')) { throw '真实 Hook Ruby 注音端到端测试未通过，查看 ruby-hook-instrumentation.txt' }
+if (-not $hookText.Contains('OK (3 tests)')) { throw '真实 Hook Ruby 注音端到端测试未通过，查看 ruby-hook-instrumentation.txt' }
+foreach ($evidence in @('webview-ruby-e2e.json', 'compose-ruby-e2e.json')) {
+    Invoke-Device @('pull', "/sdcard/Android/data/dev.furihook.testapp/files/$evidence", "$outputDirectory\$evidence") | Out-Null
+}
 Invoke-Device @('shell', 'am', 'force-stop', 'dev.furihook.testapp') | Out-Null
 Invoke-Device @('logcat', '-c') | Out-Null
 $launch = Invoke-Device @('shell', 'am', 'start', '-W', '-n', 'dev.furihook.testapp/.MainActivity')
@@ -93,7 +97,7 @@ $report = [ordered]@{
     hookExecutionVerified = $true
     applicationTestsPassedWithHooksEnabled = 6
     rubyRendererE2ETestsPassedWithHooksEnabled = 8
-    hookIntegrationE2ETestsPassed = 1
+    hookIntegrationE2ETestsPassed = 3
     registeredMethods = $registration[0].methods
     candidateSampleViewIds = @(1001, 1002, 1003, 1004)
     sensitiveInputsObserved = $false

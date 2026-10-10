@@ -14,7 +14,7 @@ public final class KuromojiReadingEngine implements ReadingEngine {
     }
 
     @Override
-    public List<RubySegment> analyze(CharSequence text) {
+    public synchronized List<RubySegment> analyze(CharSequence text) {
         if (text == null || text.length() == 0) {
             return Collections.emptyList();
         }

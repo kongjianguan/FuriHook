@@ -1,6 +1,6 @@
 # FuriHook
 
-Android 本地日语 Ruby 注音 LSPosed 模块，包名 `dev.furihook`，版本 0.2.0。当前实现 TextView 的后台词法分析与平假名振假名显示，使用随 APK 分发的 Kuromoji IPADIC 词典。全部文本处理在宿主进程本地执行。
+Android 本地日语 Ruby 注音 LSPosed 模块，包名 `dev.furihook`，版本 0.3.0。支持 TextView、已核实的 Compose 文本布局入口与 WebView HTML Ruby，使用随 APK 分发的 Kuromoji IPADIC 词典。全部文本处理在宿主进程本地执行。
 
 ## 工具链
 
@@ -14,6 +14,7 @@ Android 本地日语 Ruby 注音 LSPosed 模块，包名 `dev.furihook`，版本
 | libxposed | `io.github.libxposed:api:102.0.0`，`compileOnly` |
 | 本地词典 | `com.atilika.kuromoji:kuromoji-ipadic:0.9.0` |
 | RecyclerView / AndroidX Test | 1.4.0 / runner、core 1.7.0，JUnit extension 1.3.0 |
+| Compose 测试应用 | Foundation、UI 1.10.6，Activity 1.10.1；Java 调用实际 JVM 方法 |
 
 [AGP 官方兼容性说明](https://developer.android.com/build/releases/agp-8-13-0-release-notes)确认这组 JDK、Gradle 和 SDK 版本能够配合使用。模块只加载于实现 Modern API 102 的框架。
 
@@ -21,7 +22,7 @@ Android 本地日语 Ruby 注音 LSPosed 模块，包名 `dev.furihook`，版本
 
 | 目录 | 内容 |
 | --- | --- |
-| `app/` | 模块说明界面、Modern API 入口、TextView Hook、敏感输入保护、后台读音与版本检查 |
+| `app/` | 模块说明界面、Modern API 入口、TextView/Compose/WebView Hook、敏感输入保护、后台读音 |
 | `app/src/main/resources/META-INF/xposed/` | Java 入口、模块版本、默认测试作用域 |
 | `core/` | 纯 Java Unicode 检测、Kuromoji 读音、UTF-16 范围、真实词典语料验证 |
 | `ruby/` | Android RubySpan、原地渲染、词典原始许可与 NOTICE |
@@ -41,7 +42,9 @@ Android 本地日语 Ruby 注音 LSPosed 模块，包名 `dev.furihook`，版本
 - `JapaneseDetector` 按 Unicode 18.0 已分配的 CJK Unified/Compatibility Ideographs 范围遍历 code point，支持补充平面、代理对和空值。包含 Han 字符只产生候选结果，语言状态为 `undetermined`。U+3007 等范围之外的表意字符不纳入该候选定义。
 - `KuromojiReadingEngine` 使用词语读音；片假名转换为平假名，完整汉字词保留整词注音，送假名在唯一匹配时分离。未知读音与歧义跳过。
 - `RubyTextRenderer` 添加真实 `ReplacementSpan`，测量注音宽度并扩展行高。原有 spans 保留；宿主 ReplacementSpan 冲突与词内样式边界跳过。超出内容区单行宽度的词段保留原文。
-- `ReadingEngine`、`RubySegment`、`RubyRenderer`、`RubyStyle` 保持独立；Compose/WebView 当前提供独立适配接口。
+- Compose 在包 ClassLoader 就绪时验证 Android 文本转换方法和两种 Foundation 文本节点的实际签名。后台分析完成后使节点的布局缓存失效，重新测量时在 Android Layout 创建前添加 RubySpan。Compose 的原始 AnnotatedString、文本范围和语义保持完整；可编辑文本没有进入这些只读节点的适配上下文。
+- WebView 注入本地 DOM 脚本，逐批读取文本节点，后台生成读音，再用 `<ruby><rb>原文</rb><rt>平假名</rt></ruby>` 替换匹配的文本节点。MutationObserver 处理动态页面，导航版本检查丢弃旧结果；父元素、链接与事件监听器保留。排除输入、contenteditable、脚本、样式和已有 Ruby；复制选区时移除模块自己的 rt。
+- 三种适配共享一个本地词典实例，后台分析串行使用词典。`ReadingEngine`、`RubySegment`、`RubyRenderer`、`RubyStyle` 保持独立。
 
 ## 性能与隐私
 
@@ -70,7 +73,7 @@ Debug 构建默认启用检测日志，可使用以下命令关闭；Release 构
   -Pandroid.testInstrumentationRunnerArguments.class=dev.furihook.testapp.MainActivityE2ETest,dev.furihook.testapp.RubyRendererE2ETest
 ```
 
-14 个普通 E2E 验证原有文本、重载、输入与生命周期，以及真实词典、RubySpan、TextView Layout、Canvas 像素位置、富文本样式、点击、选择、长读音、动态文本和 RecyclerView 复用。云端还安装并启动模块说明界面，通过 UI XML 检查名称、版本和阶段内容。Hook 专项测试只在已经启用模块的 Windows 设备执行，读取目标 TextView 的实际注音，校验精确范围、读音与交互。
+14 个普通 E2E 验证原有文本、重载、输入与生命周期，以及真实词典、RubySpan、TextView Layout、Canvas 像素位置、富文本样式、点击、选择、长读音、动态文本和 RecyclerView 复用。云端还安装并启动模块说明界面，通过 UI XML 检查名称、版本和阶段内容。Hook 专项测试只在已经启用模块的 Windows 设备执行，读取实际 TextView/Compose Layout 的 RubySpan 与 WebView DOM，校验范围、读音、动态更新与交互。
 
 Actions 保存 APK、JUnit XML/HTML、真实词典 TSV 语料报告、Lint、元数据与 SHA-256、模块界面 XML 和模拟器验证 JSON。这些产物支持重复执行与独立复查。
 
@@ -116,7 +119,9 @@ pwsh -NoProfile -File scripts/test_windows_emulator.ps1
 
 ## 覆盖边界
 
-自定义 TextView 子类完全覆盖目标方法且不调用父类时，基类 Hook 无法处理更新。Editable、PrecomputedText、转换控件、Compose、WebView DOM 和自定义 Canvas 绘制需要独立适配。字符数组调用只有现有 Spannable 缓冲支持原地注音；模块不改变该入口的原始参数。
+自定义 TextView 子类完全覆盖目标方法且不调用父类时，基类 Hook 无法处理更新。Editable、PrecomputedText、转换控件和自定义 Canvas 绘制跳过注音。字符数组调用只有现有 Spannable 缓冲支持原地注音；模块不改变该入口的原始参数。
+
+Compose 适配核实了 1.10.6 的内部类和 JVM 方法签名。宿主对这些内部类或方法执行混淆、移除，或使用不同签名时，日志报告 `compose_unsupported`；此时无法保证该宿主文本注音。X 12.31.0 的 APK 和实际页面尚未在测试设备验证。WebView 适配处理当前主文档，iframe、Shadow DOM、关闭 JavaScript 的页面和浏览器自定义内核需要独立验证；过长文本节点仅分析有界前缀。
 
 超过 2048 UTF-16 code unit 的尾部不会分析，`truncated` 明示该情况。视图状态或待处理集合达到 256 项上限时清理已有状态，后续文本更新重新建立状态。候选检测无法区分日语、中文、韩文中的 Han 字符；IPADIC 的歧义读音、专有名词和新词存在准确率限制。
 
