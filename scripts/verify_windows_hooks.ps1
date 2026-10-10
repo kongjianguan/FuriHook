@@ -50,9 +50,18 @@ if (@($testEvents | Where-Object event -Match 'failed').Count -ne 0) { throw 'in
 $hookClasses = 'dev.furihook.testapp.RubyHookE2ETest,dev.furihook.testapp.RubyWebViewHookE2ETest,dev.furihook.testapp.RubyComposeHookE2ETest'
 $hookOutput = Invoke-Device @('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', $hookClasses, '-e', 'requireFuriHook', 'true', 'dev.furihook.testapp.test/androidx.test.runner.AndroidJUnitRunner')
 $hookOutput | Set-Content "$outputDirectory\ruby-hook-instrumentation.txt" -Encoding utf8
+$adapterLogs = Invoke-Device @('logcat', '-d', '-v', 'raw', '-s', 'FuriHook:I')
+$adapterLogs | Set-Content "$outputDirectory\ruby-adapter-logcat.txt" -Encoding utf8
 $hookText = $hookOutput -join "`n"
 if (-not $hookText.Contains('OK (3 tests)')) { throw '真实 Hook Ruby 注音端到端测试未通过，查看 ruby-hook-instrumentation.txt' }
-foreach ($evidence in @('webview-ruby-e2e.json', 'compose-ruby-e2e.json')) {
+$adapterEvents = @($adapterLogs | Where-Object { $_.StartsWith($prefix) } | ForEach-Object {
+    $_.Substring($prefix.Length) | ConvertFrom-Json
+})
+foreach ($event in @('webview_hooks_registered', 'webview_ruby_applied', 'compose_hooks_registered', 'compose_ruby_applied')) {
+    if (@($adapterEvents | Where-Object event -eq $event).Count -eq 0) { throw "缺少适配器事件：$event" }
+}
+if (@($adapterEvents | Where-Object event -Match 'failed').Count -ne 0) { throw '适配器 Hook 日志报告错误' }
+foreach ($evidence in @('webview-ruby-e2e.json', 'compose-ruby-e2e.json', 'compose-simple-ruby-pixels.png')) {
     Invoke-Device @('pull', "/sdcard/Android/data/dev.furihook.testapp/files/$evidence", "$outputDirectory\$evidence") | Out-Null
 }
 Invoke-Device @('shell', 'am', 'force-stop', 'dev.furihook.testapp') | Out-Null

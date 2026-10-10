@@ -1,6 +1,7 @@
 package dev.furihook.testapp;
 
 import android.os.Bundle;
+import android.graphics.Color;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -48,7 +49,9 @@ public final class ComposeRubyFixtureActivity extends ComponentActivity {
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
         column.setPadding(24, 48, 24, 24);
+        column.setBackgroundColor(Color.WHITE);
         ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(Color.WHITE);
         scroll.addView(column);
         setContentView(scroll);
 
@@ -98,6 +101,7 @@ public final class ComposeRubyFixtureActivity extends ComponentActivity {
     private ComposeView addView(LinearLayout column, int id) {
         ComposeView view = new ComposeView(this);
         view.setId(id);
+        view.setBackgroundColor(Color.WHITE);
         column.addView(view, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         return view;

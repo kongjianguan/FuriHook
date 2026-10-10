@@ -246,8 +246,8 @@ public final class RubyWebViewHookE2ETest {
                         + "editableRuby:ruby('#editable'),passwordRuby:ruby('#password'),"
                         + "editableBaseText:baseText('#editable'),"
                         + "passwordType:document.getElementById('password').type,passwordValue:document.getElementById('password').value,"
-                        + "fixtureRubyCount:document.querySelectorAll('[data-fixture-existing] ruby').length,"
-                        + "fixtureNestedRubyCount:document.querySelectorAll('[data-fixture-existing] ruby ruby').length,"
+                        + "fixtureRubyCount:document.querySelectorAll('ruby[data-fixture-existing]').length,"
+                        + "fixtureNestedRubyCount:marked.querySelectorAll('ruby').length,"
                         + "fixtureOriginalReading:marked.querySelector('rt').textContent,"
                         + "copyEvents:window.fixtureState.copyEvents})"
                         + "})()");

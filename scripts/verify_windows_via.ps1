@@ -59,7 +59,7 @@ function Wait-PageReport {
 
 function Tap-VisibleText {
     param([xml]$Document, [string]$Text)
-    $node = $Document.SelectSingleNode("//node[@text='$Text']")
+    $node = $Document.SelectSingleNode("//node[@text='$Text' or @content-desc='$Text']")
     if (-not $node) { throw "UIAutomator 没有找到可触摸文本：$Text" }
     $bounds = [regex]::Match($node.GetAttribute('bounds'), '^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$')
     if (-not $bounds.Success) { throw "UIAutomator 文本范围无效：$Text" }
@@ -98,12 +98,12 @@ try {
 
     Tap-VisibleText $initial.Document '生成动态 Ruby 注音'
     $updated = Wait-PageReport 'updated' { param($report) $report.updateRequested -and $report.updatedRubyMatch }
-    foreach ($pair in @('明日:あした', '図書館:としょかん')) {
+    foreach ($pair in @('明日:あした', '図書館:としょかん', '行:い')) {
         if ($pair -notin $updated.Report.updatedRubies) { throw "触摸更新后的 Ruby 缺少范围：$pair" }
     }
 
     $linkDump = Save-PageDump 'link-before'
-    Tap-VisibleText $linkDump '日本語リンク'
+    Tap-VisibleText $linkDump 'Open link'
     $linked = Wait-PageReport 'linked' { param($report) $report.linkClickCount -eq 1 }
     Save-PageDump 'final' | Out-Null
     $logs = Invoke-Device @('logcat', '-d', '-v', 'raw', '-s', 'FuriHook:I')

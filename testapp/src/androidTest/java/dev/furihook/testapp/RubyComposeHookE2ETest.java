@@ -6,9 +6,17 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
 import android.graphics.RectF;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.text.Spanned;
 import android.view.MotionEvent;
+import android.view.PixelCopy;
+import android.view.Window;
 import android.widget.ScrollView;
 
 import androidx.compose.ui.platform.ComposeView;
@@ -29,6 +37,8 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 @RunWith(AndroidJUnit4.class)
 public final class RubyComposeHookE2ETest {
@@ -58,10 +68,10 @@ public final class RubyComposeHookE2ETest {
                 Spanned initial = spanned(paragraphCharSequence(activity.richLayout()));
                 assertEquals(ComposeRubyFixtureActivity.ORIGINAL, initial.toString());
                 assertRuby(initial, new Expected[] {
-                        new Expected(0, 2, "今日", "きょう"),
-                        new Expected(3, 5, "学校", "がっこう"),
-                        new Expected(6, 9, "日本語", "にほんご"),
-                        new Expected(10, 12, "勉強", "べんきょう")
+                        new Expected(0, 2, "今日", "きょう", "きょう"),
+                        new Expected(3, 5, "学校", "がっこう", "がっこう"),
+                        new Expected(6, 9, "日本語", "にほんご", "にほんご"),
+                        new Expected(10, 12, "勉強", "べんきょう", "べんきょう")
                 });
                 initialRuby[0] = rubyJsonUnchecked(initial);
 
@@ -70,7 +80,7 @@ public final class RubyComposeHookE2ETest {
                 assertEquals("学校", simple.toString());
                 simpleRuby[0] = !rubySpans(simple).isEmpty();
                 assertRuby((Spanned) simple, new Expected[] {
-                        new Expected(0, 2, "学校", "がっこう")
+                        new Expected(0, 2, "学校", "がっこう", "がっこう")
                 });
 
                 TextLayoutResult longResult = activity.longLayout();
@@ -107,6 +117,8 @@ public final class RubyComposeHookE2ETest {
             assertTrue("Compose simple text 节点必须由真实 Hook 添加 RubySpan", simpleRuby[0]);
             assertTrue("英文与假名样例必须排除 RubySpan", excludedRuby[0]);
 
+            JSONObject pixelEvidence = captureSimpleRubyPixels(scenario);
+
             tapLink(scenario, richView[0], linkLayout[0],
                     ComposeRubyFixtureActivity.ORIGINAL.indexOf("日本語") + 1);
             scenario.onActivity(activity -> assertEquals("真实 Compose 链接必须响应触摸",
@@ -119,8 +131,9 @@ public final class RubyComposeHookE2ETest {
                 Spanned updated = spanned(paragraphCharSequence(activity.richLayout()));
                 assertEquals(ComposeRubyFixtureActivity.UPDATED, updated.toString());
                 assertRuby(updated, new Expected[] {
-                        new Expected(0, 2, "明日", "あした"),
-                        new Expected(3, 6, "図書館", "としょかん")
+                        new Expected(0, 2, "明日", "あした", "あした"),
+                        new Expected(3, 6, "図書館", "としょかん", "としょかん"),
+                        new Expected(7, 8, "行", "いき", "い")
                 });
                 updatedRuby[0] = rubyJsonUnchecked(updated);
             });
@@ -132,6 +145,7 @@ public final class RubyComposeHookE2ETest {
             evidence.put("originalRuby", initialRuby[0]);
             evidence.put("simpleText", "学校");
             evidence.put("simpleRuby", simpleRuby[0]);
+            evidence.put("simpleRubyPixelCopy", pixelEvidence);
             evidence.put("updated", ComposeRubyFixtureActivity.UPDATED);
             evidence.put("updatedRuby", updatedRuby[0]);
             evidence.put("longTextLineCount", longLines[0]);
@@ -177,10 +191,12 @@ public final class RubyComposeHookE2ETest {
     private static CharSequence simpleCharSequence(ComposeView composeView) {
         assertTrue("ComposeView 必须包含真实 AndroidComposeView", composeView.getChildCount() > 0);
         Object root = invoke(composeView.getChildAt(0), "getRoot");
-        return findSimpleText(root);
+        Object paragraph = findSimpleParagraph(root);
+        assertNotNull("简单文本必须使用已测量的真实段落", paragraph);
+        return (CharSequence) invoke(paragraph, "getCharSequence$ui_text");
     }
 
-    private static CharSequence findSimpleText(Object layoutNode) {
+    private static Object findSimpleParagraph(Object layoutNode) {
         Object nodeChain = invoke(layoutNode, "getNodes$ui");
         Object node = invoke(nodeChain, "getHead$ui");
         while (node != null && node.getClass().getName().startsWith("androidx.compose.")) {
@@ -189,15 +205,84 @@ public final class RubyComposeHookE2ETest {
                 Object cache = field(node, "_layoutCache");
                 Object paragraph = invoke(cache, "getParagraph$foundation");
                 assertNotNull("简单文本必须使用已测量的真实段落", paragraph);
-                return (CharSequence) invoke(paragraph, "getCharSequence$ui_text");
+                return paragraph;
             }
             node = invoke(node, "getChild$ui");
         }
         for (Object child : (List<?>) invoke(layoutNode, "getChildren$ui")) {
-            CharSequence result = findSimpleText(child);
+            Object result = findSimpleParagraph(child);
             if (result != null) return result;
         }
         return null;
+    }
+
+    private static JSONObject captureSimpleRubyPixels(
+            ActivityScenario<ComposeRubyFixtureActivity> scenario) throws Exception {
+        ComposeView[] viewHolder = new ComposeView[1];
+        Window[] windowHolder = new Window[1];
+        Rect[] sourceHolder = new Rect[1];
+        int[] bandBottomHolder = new int[1];
+        scenario.onActivity(activity -> {
+            ComposeView view = activity.findViewById(ComposeRubyFixtureActivity.ID_SIMPLE);
+            assertTrue("简单文本 ComposeView 必须已经绘制", view.getWidth() > 0 && view.getHeight() > 0);
+            Object root = invoke(view.getChildAt(0), "getRoot");
+            Object paragraph = findSimpleParagraph(root);
+            Spanned text = spanned((CharSequence) invoke(paragraph, "getCharSequence$ui_text"));
+            assertRuby(text, new Expected[] {
+                    new Expected(0, 2, "学校", "がっこう", "がっこう")
+            });
+
+            android.text.TextPaint paint = (android.text.TextPaint) invoke(
+                    paragraph, "getTextPaint$ui_text");
+            Paint.FontMetricsInt metrics = paint.getFontMetricsInt();
+            float baseline = ((Number) invoke(paragraph, "getFirstBaseline")).floatValue();
+            int bandBottom = (int) Math.floor(baseline + metrics.ascent);
+            assertTrue("Ruby 绘制检测带必须覆盖基础字体上方", bandBottom >= 0);
+
+            int[] location = new int[2];
+            view.getLocationInWindow(location);
+            sourceHolder[0] = new Rect(location[0], location[1],
+                    location[0] + view.getWidth(), location[1] + view.getHeight());
+            viewHolder[0] = view;
+            windowHolder[0] = activity.getWindow();
+            bandBottomHolder[0] = bandBottom;
+        });
+
+        ComposeView view = viewHolder[0];
+        Bitmap bitmap = Bitmap.createBitmap(view.getWidth(), view.getHeight(), Bitmap.Config.ARGB_8888);
+        CountDownLatch copied = new CountDownLatch(1);
+        int[] copyStatus = new int[1];
+        PixelCopy.request(windowHolder[0], sourceHolder[0], bitmap, status -> {
+            copyStatus[0] = status;
+            copied.countDown();
+        }, new Handler(Looper.getMainLooper()));
+        assertTrue("PixelCopy 必须在十秒内完成", copied.await(10, TimeUnit.SECONDS));
+        assertEquals("PixelCopy 必须成功复制实际窗口像素", PixelCopy.SUCCESS, copyStatus[0]);
+
+        int bandBottom = Math.min(bandBottomHolder[0], bitmap.getHeight() - 1);
+        int nonWhitePixels = 0;
+        for (int y = 0; y <= bandBottom; y++) {
+            for (int x = 0; x < bitmap.getWidth(); x++) {
+                if (bitmap.getPixel(x, y) != Color.WHITE) nonWhitePixels++;
+            }
+        }
+        assertTrue("Ruby 注音必须在基础字体上方产生真实绘制像素", nonWhitePixels > 10);
+
+        File directory = view.getContext().getExternalFilesDir(null);
+        File image = new File(directory, "compose-simple-ruby-pixels.png");
+        try (FileOutputStream output = new FileOutputStream(image)) {
+            assertTrue("PixelCopy 位图必须保存为 PNG", bitmap.compress(Bitmap.CompressFormat.PNG, 100, output));
+        } finally {
+            bitmap.recycle();
+        }
+
+        JSONObject evidence = new JSONObject();
+        evidence.put("image", image.getAbsolutePath());
+        evidence.put("pixelCount", nonWhitePixels);
+        evidence.put("bandBottomY", bandBottom);
+        evidence.put("width", view.getWidth());
+        evidence.put("height", view.getHeight());
+        return evidence;
     }
 
     private static void tapLink(ActivityScenario<ComposeRubyFixtureActivity> scenario,
@@ -249,7 +334,7 @@ public final class RubyComposeHookE2ETest {
             assertEquals("RubySpan 终点", wanted.end, end);
             assertEquals("RubySpan 正文", wanted.base, text.subSequence(start, end).toString());
             assertEquals("RubySpan 读音", wanted.reading, invoke(span, "getReading"));
-            assertEquals("RubySpan 注音", wanted.reading, invoke(span, "getRubyText"));
+            assertEquals("RubySpan 注音", wanted.ruby, invoke(span, "getRubyText"));
             assertTrue("RubySpan 必须来自 FuriHook 模块类加载器",
                     span.getClass().getClassLoader() != RubyComposeHookE2ETest.class.getClassLoader());
         }
@@ -344,12 +429,14 @@ public final class RubyComposeHookE2ETest {
         final int end;
         final String base;
         final String reading;
+        final String ruby;
 
-        Expected(int start, int end, String base, String reading) {
+        Expected(int start, int end, String base, String reading, String ruby) {
             this.start = start;
             this.end = end;
             this.base = base;
             this.reading = reading;
+            this.ruby = ruby;
         }
     }
 }

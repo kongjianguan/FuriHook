@@ -325,16 +325,17 @@ public final class ComposeHook {
                 List<RubySegment> fitting = fitSegments(spannable, cached, initializedPaint,
                         context.maxWidth);
                 if (!fitting.isEmpty()) {
-                    for (RubySegment segment : fitting) {
-                        spannable.setSpan(
-                                new TypefacePreservingSpan(initializedPaint.getTypeface()),
-                                segment.getStartUtf16(), segment.getEndUtf16(),
-                                Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
-                    }
                     renderer.apply(spannable, fitting, STYLE);
                     applyRubyLineHeight(spannable, initializedPaint);
                 }
-                return renderer.hasRuby(spannable) ? spannable : original;
+                if (!renderer.hasRuby(spannable)) return original;
+                if (BuildConfig.DETECTION_LOGS && logs.acquire(SystemClock.elapsedRealtime())) {
+                    int count = spannable.getSpans(0, spannable.length(), RubySpan.class).length;
+                    log.event("{\"event\":\"compose_ruby_applied\",\"segmentCount\":" + count
+                            + ",\"nodeType\":\"" + (context.annotated ? "annotated" : "simple")
+                            + "\"}");
+                }
+                return spannable;
             } catch (Throwable failure) {
                 failure("compose_text_adaptation_failed", failure);
                 return original;
@@ -765,20 +766,5 @@ public final class ComposeHook {
             }
         }
 
-        private static final class TypefacePreservingSpan extends MetricAffectingSpan {
-            private final android.graphics.Typeface typeface;
-
-            TypefacePreservingSpan(android.graphics.Typeface typeface) {
-                this.typeface = typeface;
-            }
-
-            @Override public void updateMeasureState(TextPaint paint) {
-                paint.setTypeface(typeface);
-            }
-
-            @Override public void updateDrawState(TextPaint paint) {
-                paint.setTypeface(typeface);
-            }
-        }
     }
 }

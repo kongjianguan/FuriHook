@@ -5,16 +5,18 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>FuriHook Via Ruby E2E</title>
   <style>
-    body { font: 20px/1.8 sans-serif; margin: 16px; }
-    button, input, [contenteditable="true"] { display: block; margin: 12px 0; padding: 8px; }
-    #result { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.4 monospace; }
+    body { font: 16px/1.35 sans-serif; margin: 8px; }
+    h1 { font-size: 20px; margin: 6px 0; }
+    p { margin: 4px 0; }
+    button, input, [contenteditable="true"] { display: block; margin: 4px 0; padding: 2px; }
+    #result { white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.25 monospace; }
   </style>
 </head>
 <body>
   <h1>FuriHook Via Ruby E2E</h1>
   <p id="original">今日は学校で日本語を勉強します。</p>
-  <p>链接操作</p>
-  <p><a id="test-link" href="#link-result">日本語リンク</a></p>
+  <pre id="result">{"phase":"loading"}</pre>
+  <p><a id="test-link" aria-label="Open link" href="#link-result">Open link <span>日本語</span></a></p>
   <p id="link-result">链接触发次数：<span id="link-count">0</span></p>
   <button id="update-button" type="button">生成动态 Ruby 注音</button>
   <p id="updated">更新前</p>
@@ -22,7 +24,6 @@
   <input id="excluded-input" value="漢字入力">
   <div id="excluded-editable" contenteditable="true">編集可能な漢字</div>
   <p id="existing-ruby">既有 Ruby 检查：<ruby id="user-ruby">漢<rt>かん</rt></ruby></p>
-  <pre id="result">{"phase":"loading"}</pre>
   <script>
     (() => {
       const result = document.getElementById("result");
@@ -51,7 +52,7 @@
       function renderReport() {
         const originalPairs = rubyPairs(original);
         const updatedPairs = rubyPairs(updated);
-        const expectedUpdated = ["明日:あした", "図書館:としょかん"];
+        const expectedUpdated = ["明日:あした", "図書館:としょかん", "行:い"];
         const existing = document.getElementById("user-ruby");
         const report = {
           phase: "waiting",
