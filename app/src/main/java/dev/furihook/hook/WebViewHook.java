@@ -291,7 +291,8 @@ public final class WebViewHook {
             state.inFlight = false;
             state.pullInFlight = false;
             synchronized (pending) {
-                pending.remove(state);
+                Work removed = pending.remove(state);
+                if (removed != null) pendingTextItems -= removed.items.size();
             }
         }
 
@@ -397,8 +398,14 @@ public final class WebViewHook {
             for (int index = 0; index < count; index++) {
                 JSONObject item = items.getJSONObject(index);
                 String text = item.getString("text");
-                if (text.length() > MAX_TEXT_LENGTH) text = text.substring(0, MAX_TEXT_LENGTH);
-                textItems.add(new TextItem(item.getLong("id"), text));
+                int offset = item.optInt("offset", 0);
+                if (text.length() > MAX_TEXT_LENGTH) {
+                    text = text.substring(0, MAX_TEXT_LENGTH);
+                    if (text.length() > 0 && Character.isHighSurrogate(text.charAt(text.length() - 1))) {
+                        text = text.substring(0, text.length() - 1);
+                    }
+                }
+                textItems.add(new TextItem(item.getLong("id"), offset, text));
             }
             if (textItems.isEmpty()) return;
             state.inFlight = true;
@@ -428,7 +435,8 @@ public final class WebViewHook {
                 } catch (Throwable failure) {
                     synchronized (pending) {
                         workerDraining = false;
-                        pending.remove(state);
+                        Work removed = pending.remove(state);
+                        if (removed != null) pendingTextItems -= removed.items.size();
                     }
                     state.inFlight = false;
                     log.failure("webview_reading_queue_failed", failure);
@@ -487,6 +495,7 @@ public final class WebViewHook {
                 }
                 JSONObject entry = new JSONObject();
                 entry.put("id", item.id);
+                entry.put("offset", item.offset);
                 entry.put("text", item.text);
                 entry.put("segments", encodedSegments);
                 output.put(entry);
@@ -605,8 +614,13 @@ public final class WebViewHook {
 
         private static final class TextItem {
             final long id;
+            final int offset;
             final String text;
-            TextItem(long id, String text) { this.id = id; this.text = text; }
+            TextItem(long id, int offset, String text) {
+                this.id = id;
+                this.offset = offset;
+                this.text = text;
+            }
         }
 
         private static final class Work {

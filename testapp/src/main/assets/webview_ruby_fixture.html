@@ -23,7 +23,11 @@
   <p id="existing"><ruby data-fixture-existing="true"><rb>今日</rb><rt>きょう</rt></ruby>は学校。</p>
   <p id="copy-source">今日は学校。</p>
   <script>
-    window.fixtureState = { dynamicRevision: 0, copyEvents: 0 };
+    window.fixtureState = {
+      dynamicRevision: 0,
+      copyEvents: 0,
+      instanceId: Date.now().toString(36) + Math.random().toString(36).slice(2)
+    };
     document.addEventListener('copy', function () {
       window.fixtureState.copyEvents += 1;
     }, true);

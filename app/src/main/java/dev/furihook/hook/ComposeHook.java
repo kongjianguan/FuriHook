@@ -276,9 +276,9 @@ public final class ComposeHook {
         }
 
         private Object afterCreateCharSequence(XposedInterface.Chain chain) throws Throwable {
-            Object original;
+            CharSequence original;
             try {
-                original = chain.proceed();
+                original = (CharSequence) chain.proceed();
             } catch (Throwable failure) {
                 paragraphPaint.remove();
                 throw failure;

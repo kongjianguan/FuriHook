@@ -20,6 +20,7 @@
       nextId: 1,
       nodes: new Map(),
       processed: new WeakSet(),
+      offsets: new WeakMap(),
       batches: [],
       dirtyNodes: [],
       dirtyNodeSet: new Set(),
@@ -45,6 +46,7 @@
           for (const mutation of mutations) {
             if (mutation.type === "characterData") {
               state.processed.delete(mutation.target);
+              state.offsets.delete(mutation.target);
               queueDirtyNode(mutation.target);
             } else if (mutation.type === "childList") {
               for (const added of mutation.addedNodes) queueDirtyRoot(added);
@@ -68,8 +70,8 @@
     function queueDirtyNode(node) {
       if (!node || node.nodeType !== 3 || state.dirtyNodeSet.has(node)) return;
       if (state.dirtyNodes.length >= MAX_DIRTY_ROOTS) {
-        const removed = state.dirtyNodes.shift();
-        state.dirtyNodeSet.delete(removed);
+        restartDocumentScan();
+        return;
       }
       state.dirtyNodes.push(node);
       state.dirtyNodeSet.add(node);
@@ -78,11 +80,29 @@
     function queueDirtyRoot(node) {
       if (!node || state.dirtyRootSet.has(node)) return;
       if (state.dirtyRoots.length >= MAX_DIRTY_ROOTS) {
-        const removed = state.dirtyRoots.shift();
-        state.dirtyRootSet.delete(removed);
+        restartDocumentScan();
+        return;
       }
       state.dirtyRoots.push(node);
       state.dirtyRootSet.add(node);
+    }
+
+    function restartDocumentScan() {
+      state.dirtyNodes.length = 0;
+      state.dirtyNodeSet.clear();
+      state.dirtyRoots.length = 0;
+      state.dirtyRootSet.clear();
+      state.dirtyWalker = null;
+      state.initialWalker = null;
+      state.initialDone = false;
+      state.processed = new WeakSet();
+    }
+
+    function nextTextChunk(node) {
+      const start = state.offsets.get(node) || 0;
+      let end = Math.min(node.data.length, start + MAX_NODE_TEXT);
+      if (end < node.data.length && /[\uD800-\uDBFF]$/.test(node.data.slice(start, end))) end--;
+      return {start: start, end: end, text: node.data.slice(start, end)};
     }
 
     function nextDirtyNode() {
@@ -113,21 +133,25 @@
       return node;
     }
 
-    function appendCandidate(node, result, total) {
-      if (state.processed.has(node)) return total;
-      state.processed.add(node);
-      if (blocked(node) || !KANJI.test(node.data)) return total;
-      if (result.items.length >= MAX_BATCH_NODES || total >= MAX_BATCH_TEXT) {
-        queueDirtyNode(node);
+    function appendCandidate(node, chunk, result, total) {
+      if (blocked(node) || !chunk.text) {
+        state.processed.add(node);
+        state.offsets.delete(node);
         return total;
       }
-      let text = node.data.slice(0, MAX_NODE_TEXT);
-      if (text.length < node.data.length && /[\uD800-\uDBFF]$/.test(text)) text = text.slice(0, -1);
-      if (!text) return total;
+      const more = chunk.end < node.data.length;
+      if (more) {
+        state.offsets.set(node, chunk.end);
+        queueDirtyNode(node);
+      } else {
+        state.processed.add(node);
+        state.offsets.delete(node);
+      }
+      if (!KANJI.test(chunk.text)) return total;
       const id = state.nextId++;
-      state.nodes.set(id, node);
-      result.items.push({id: id, text: text});
-      return total + text.length;
+      state.nodes.set(id, {node: node, offset: chunk.start, text: chunk.text});
+      result.items.push({id: id, offset: chunk.start, text: chunk.text});
+      return total + chunk.text.length;
     }
 
     function takeBatch() {
@@ -156,12 +180,12 @@
         if (!node) break;
         visited++;
         if (state.processed.has(node)) continue;
-        const maxText = Math.min(node.data.length, MAX_NODE_TEXT);
-        if (result.items.length >= MAX_BATCH_NODES || total + maxText > MAX_BATCH_TEXT) {
+        const chunk = nextTextChunk(node);
+        if (result.items.length >= MAX_BATCH_NODES || total + chunk.text.length > MAX_BATCH_TEXT) {
           queueDirtyNode(node);
           break;
         }
-        total = appendCandidate(node, result, total);
+        total = appendCandidate(node, chunk, result, total);
       }
       result.more = state.dirtyNodes.length > 0 || state.dirtyRoots.length > 0
         || state.dirtyWalker !== null || !state.initialDone;
@@ -180,9 +204,18 @@
       }, 80);
     }
 
-    function wrapTextNode(node, original, segments) {
-      if (!node.isConnected || blocked(node) || node.data.slice(0, original.length) !== original) return 0;
+    function wrapTextNode(node, offset, original, segments) {
+      if (!node.isConnected || blocked(node)
+          || node.data.slice(offset, offset + original.length) !== original) {
+        if (node.isConnected) {
+          state.processed.delete(node);
+          state.offsets.delete(node);
+          queueDirtyNode(node);
+        }
+        return 0;
+      }
       const fragment = document.createDocumentFragment();
+      if (offset > 0) fragment.appendChild(document.createTextNode(node.data.slice(0, offset)));
       let cursor = 0;
       let rubyCount = 0;
       for (const segment of segments) {
@@ -208,8 +241,16 @@
       }
       if (rubyCount === 0) return 0;
       if (cursor < original.length) fragment.appendChild(document.createTextNode(original.slice(cursor)));
-      if (original.length < node.data.length) fragment.appendChild(document.createTextNode(node.data.slice(original.length)));
-      node.parentNode.replaceChild(fragment, node);
+      const tailStart = offset + original.length;
+      if (tailStart < node.data.length) fragment.appendChild(document.createTextNode(node.data.slice(tailStart)));
+      const parent = node.parentNode;
+      if (state.initialWalker && state.initialWalker.currentNode === node) {
+        state.initialWalker.currentNode = parent;
+      }
+      if (state.dirtyWalker && state.dirtyWalker.currentNode === node) {
+        state.dirtyWalker.currentNode = parent;
+      }
+      parent.replaceChild(fragment, node);
       return rubyCount;
     }
 
@@ -217,14 +258,22 @@
       if (payload.generation !== state.generation || window.__FuriHook102 !== state) return 0;
       let applied = 0;
       for (const entry of payload.items) {
-        const node = state.nodes.get(entry.id);
+        const tracked = state.nodes.get(entry.id);
         state.nodes.delete(entry.id);
-        if (node) applied += wrapTextNode(node, entry.text, entry.segments);
+        if (tracked) applied += wrapTextNode(tracked.node, entry.offset, entry.text, entry.segments);
       }
       return applied;
     };
     state.drop = function (ids) {
-      for (const id of ids) state.nodes.delete(id);
+      for (const id of ids) {
+        const tracked = state.nodes.get(id);
+        state.nodes.delete(id);
+        if (!tracked || !tracked.node.isConnected) continue;
+        state.processed.delete(tracked.node);
+        state.offsets.set(tracked.node, tracked.offset);
+        queueDirtyNode(tracked.node);
+      }
+      scheduleScan();
     };
     state.pull = function (requestedGeneration) {
       if (requestedGeneration !== state.generation || window.__FuriHook102 !== state) return "";

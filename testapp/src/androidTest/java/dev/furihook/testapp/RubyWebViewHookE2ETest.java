@@ -107,6 +107,86 @@ public final class RubyWebViewHookE2ETest {
             JSONObject finalState = snapshot(scenario);
             assertTrue("页面必须收到真实 copy event", finalState.getInt("copyEvents") > 0);
 
+            String longBase = awaitJavascript(scenario,
+                    "(function(){var p=document.createElement('p');p.id='long-single-node';"
+                            + "var prefix='A'.repeat(1800);p.appendChild(document.createTextNode(prefix+'"
+                            + ORIGINAL + "'));document.body.appendChild(p);"
+                            + "return JSON.stringify({prefixLength:prefix.length,totalLength:p.textContent.length})})()");
+            JSONObject longCreated = new JSONObject(longBase);
+            assertTrue(longCreated.getInt("prefixLength") >= 1800);
+            awaitJavascriptCondition(scenario,
+                    "document.querySelectorAll('#long-single-node ruby').length === 2");
+            JSONObject longState = new JSONObject(awaitJavascript(scenario,
+                    "(function(){var e=document.getElementById('long-single-node');"
+                            + "var c=e.cloneNode(true);c.querySelectorAll('rt,rp').forEach(function(n){n.remove()});"
+                            + "return JSON.stringify({baseText:c.textContent,ruby:Array.from(e.querySelectorAll('ruby')).map(function(r){"
+                            + "var b=r.querySelector('rb');return {base:b.textContent,reading:r.querySelector('rt').textContent}})})})()"));
+            assertEquals(repeat("A", 1800) + ORIGINAL, longState.getString("baseText"));
+            assertEquals(ORIGINAL, longState.getString("baseText").substring(1800));
+            assertEquals(2, longState.getJSONArray("ruby").length());
+            assertRuby(longState.getJSONArray("ruby"), 0, "今日", "きょう");
+            assertRuby(longState.getJSONArray("ruby"), 1, "学校", "がっこう");
+
+            JSONObject largeDocument = new JSONObject(awaitJavascript(scenario,
+                    "(function(){var root=document.createElement('div');root.id='large-document';"
+                            + "var f=document.createDocumentFragment();for(var i=0;i<340;i++){"
+                            + "var s=document.createElement('span');s.appendChild(document.createTextNode('item '+i));f.appendChild(s)}"
+                            + "root.appendChild(f);document.body.appendChild(root);"
+                            + "var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);var n=0;while(w.nextNode())n++;"
+                            + "return JSON.stringify({textNodeCount:n})})()"));
+            assertTrue("文档应超过观察器的单轮访问上限",
+                    largeDocument.getInt("textNodeCount") > 320);
+            awaitJavascriptCondition(scenario,
+                    "window.__FuriHook102 && window.__FuriHook102.initialDone"
+                            + " && !window.__FuriHook102.scanPending"
+                            + " && window.__FuriHook102.dirtyRoots.length === 0"
+                            + " && window.__FuriHook102.dirtyNodes.length === 0"
+                            + " && window.__FuriHook102.dirtyWalker === null"
+                            + " && window.__FuriHook102.batches.length === 0");
+
+            JSONObject burstCreated = new JSONObject(awaitJavascript(scenario,
+                    "(function(){var root=document.createElement('div');root.id='dynamic-burst';"
+                            + "var f=document.createDocumentFragment();for(var i=0;i<240;i++){"
+                            + "var p=document.createElement('p');p.appendChild(document.createTextNode('学校'));f.appendChild(p)}"
+                            + "root.appendChild(f);document.body.appendChild(root);"
+                            + "return JSON.stringify({paragraphs:root.childNodes.length})})()"));
+            assertEquals(240, burstCreated.getInt("paragraphs"));
+            awaitJavascriptCondition(scenario,
+                    "document.querySelectorAll('#dynamic-burst ruby').length === 240",
+                    45_000L);
+            JSONObject burstState = new JSONObject(awaitJavascript(scenario,
+                    "(function(){var root=document.getElementById('dynamic-burst');"
+                            + "var c=root.cloneNode(true);c.querySelectorAll('rt,rp').forEach(function(n){n.remove()});"
+                            + "var state=window.__FuriHook102;return JSON.stringify({"
+                            + "rubyCount:root.querySelectorAll('ruby').length,baseText:c.textContent,"
+                            + "batchQueue:state.batches.length,dirtyRootQueue:state.dirtyRoots.length,"
+                            + "dirtyNodeQueue:state.dirtyNodes.length,trackedNodes:state.nodes.size,"
+                            + "generation:state.generation})})()"));
+            assertEquals(240, burstState.getInt("rubyCount"));
+            assertEquals(repeat("学校", 240), burstState.getString("baseText"));
+            assertTrue(burstState.getInt("batchQueue") <= 7);
+            assertTrue(burstState.getInt("dirtyRootQueue") <= 192);
+            assertTrue(burstState.getInt("dirtyNodeQueue") <= 192);
+            assertEquals(0, burstState.getInt("trackedNodes"));
+
+            String previousPageId = awaitJavascript(scenario,
+                    "window.fixtureState.instanceId");
+            long previousGeneration = burstState.getLong("generation");
+            AtomicReference<WebView> reloadView = new AtomicReference<>();
+            scenario.onActivity(activity -> reloadView.set(activity.webView()));
+            scenario.onActivity(activity -> reloadView.get().reload());
+            awaitJavascriptCondition(scenario,
+                    "window.fixtureState && window.fixtureState.instanceId !== '"
+                            + previousPageId + "'");
+            awaitJavascriptCondition(scenario,
+                    "document.querySelectorAll('#plain ruby').length >= 2");
+            JSONObject reloadState = new JSONObject(awaitJavascript(scenario,
+                    "(function(){return JSON.stringify({generation:window.__FuriHook102.generation,"
+                            + "rubyCount:document.querySelectorAll('#plain ruby').length})})()"));
+            assertTrue("重新加载后的注入代次必须更新",
+                    reloadState.getLong("generation") > previousGeneration);
+            assertEquals(2, reloadState.getInt("rubyCount"));
+
             JSONObject evidence = new JSONObject();
             evidence.put("test", "realWebViewGetsRubyAndKeepsDomInteractionsAndCopyText");
             evidence.put("requireFuriHook", requireFuriHook);
@@ -125,6 +205,23 @@ public final class RubyWebViewHookE2ETest {
             evidence.put("copyEventCount", finalState.getInt("copyEvents"));
             evidence.put("clipboardContainsOriginal", ORIGINAL.contentEquals(copiedText));
             evidence.put("clipboardLength", copiedText.length());
+            evidence.put("longNodePrefixLength", longCreated.getInt("prefixLength"));
+            evidence.put("longNodeRuby", longState.getJSONArray("ruby"));
+            evidence.put("longNodeBasePreserved",
+                    longState.getString("baseText").equals(repeat("A", 1800) + ORIGINAL));
+            evidence.put("largeDocumentTextNodeCount", largeDocument.getInt("textNodeCount"));
+            evidence.put("dynamicBurstParagraphs", burstCreated.getInt("paragraphs"));
+            evidence.put("dynamicBurstRubyCount", burstState.getInt("rubyCount"));
+            evidence.put("dynamicBurstBaseTextPreserved",
+                    repeat("学校", 240).equals(burstState.getString("baseText")));
+            evidence.put("dynamicBurstQueues", new JSONObject()
+                    .put("batches", burstState.getInt("batchQueue"))
+                    .put("dirtyRoots", burstState.getInt("dirtyRootQueue"))
+                    .put("dirtyNodes", burstState.getInt("dirtyNodeQueue"))
+                    .put("trackedNodes", burstState.getInt("trackedNodes")));
+            evidence.put("reloadGenerationBefore", previousGeneration);
+            evidence.put("reloadGenerationAfter", reloadState.getLong("generation"));
+            evidence.put("reloadRubyCount", reloadState.getInt("rubyCount"));
             File report = saveEvidence(scenario, evidence);
             System.out.println("FURIHOOK_WEBVIEW_E2E_REPORT=" + report.getAbsolutePath());
         }
@@ -245,14 +342,26 @@ public final class RubyWebViewHookE2ETest {
 
     private static void awaitJavascriptCondition(ActivityScenario<WebViewRubyFixtureActivity> scenario,
             String condition) throws Exception {
-        long deadline = SystemClock.uptimeMillis() + 15_000L;
+        awaitJavascriptCondition(scenario, condition, 15_000L);
+    }
+
+    private static void awaitJavascriptCondition(ActivityScenario<WebViewRubyFixtureActivity> scenario,
+            String condition, long timeoutMillis) throws Exception {
+        long deadline = SystemClock.uptimeMillis() + timeoutMillis;
         while (SystemClock.uptimeMillis() < deadline) {
             String value = awaitJavascript(scenario, "Boolean(" + condition + ")");
             if (Boolean.parseBoolean(value)) return;
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             Thread.sleep(100L);
         }
-        throw new AssertionError("真实 WebView 注音状态在 15 秒内未达到条件：" + condition);
+        throw new AssertionError("真实 WebView 注音状态在 " + timeoutMillis
+                + " 毫秒内未达到条件：" + condition);
+    }
+
+    private static String repeat(String value, int count) {
+        StringBuilder result = new StringBuilder(value.length() * count);
+        for (int index = 0; index < count; index++) result.append(value);
+        return result.toString();
     }
 
     private static void assertRuby(JSONArray ruby, int index, String base, String reading)
