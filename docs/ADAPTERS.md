@@ -8,6 +8,8 @@
 
 原有 Emoji、样式、占位符与链接范围保留；ReplacementSpan 重叠、词内样式边界和超宽词段跳过注音。只读文本节点上下文限定了处理范围，输入布局不会通过此适配入口处理。
 
+文本测量使用 Compose 已应用段落样式的 AndroidTextPaint，并逐词应用覆盖范围的 metric spans。Ruby 的 LineHeightSpan 在宿主行高处理后扩展 FontMetricsInt，预留注音空间。节点状态保存完整文本版本及多个段落来源，后台结果只触发当前文本的布局刷新。
+
 内部类名与签名经过验证后才注册。内部名称被混淆、方法被移除或版本结构变化时，需要对真实宿主 APK 重新核实。测试应用使用真实 BasicText，无 LSPosed API 依赖；Java 通过已核实的 JVM 方法调用 Compose。
 
 ## WebView
@@ -15,6 +17,8 @@
 Hook 公开导航方法与 WebViewClient 页面回调；不替换宿主 client。使用 `evaluateJavascript` 收集有界 DOM 文本批次，再将后台词典结果通过 JSON 返回页面，不提供 JavaScriptInterface。页面导航版本和节点原文检查防止应用旧结果。
 
 DOM 脚本用标准 `<ruby><rb>…</rb><rt>…</rt></ruby>` 处理文本节点，保持父元素与事件处理器。MutationObserver 收集后续变化，通过自有节点标记避免重复注音。输入框、可编辑区域、脚本、样式、已有 Ruby 排除；复制包含模块 Ruby 的选区时删除自有 rt。
+
+长文本按代理对安全的 UTF-16 偏移逐段处理，每段最多 900 个 code unit。变更队列达到容量时重新扫描文档，后台队列拒绝的节点重新排队；替换当前遍历节点前移动 TreeWalker，保证继续遍历后续节点。单批最多 24 个文本项，JavaScript 待取批次最多 7 批。
 
 当前范围为主文档，不进入 iframe 和 Shadow DOM。页面没有开启 JavaScript 时保持宿主设置。外部页面仍由宿主自己的网络访问机制加载；模块中的词典与文本处理不调用网络服务。
 

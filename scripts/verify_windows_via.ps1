@@ -154,5 +154,5 @@ try {
     }).Count -eq 0) {
         Read-Vector 'scope add dev.furihook dev.furihook.testapp/0' | Out-Null
     }
-    Invoke-Device @('reverse', 'tcp:18765', 'tcp:18765') | Out-Null
+    Invoke-Device @('reverse', '--remove', 'tcp:18765') | Out-Null
 }

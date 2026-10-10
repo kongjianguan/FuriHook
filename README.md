@@ -77,7 +77,7 @@ Debug 构建默认启用检测日志，可使用以下命令关闭；Release 构
 
 Actions 保存 APK、JUnit XML/HTML、真实词典 TSV 语料报告、Lint、元数据与 SHA-256、模块界面 XML 和模拟器验证 JSON。这些产物支持重复执行与独立复查。
 
-版本 0.2.0 的 [Actions 37945088658](https://github.com/kongjianguan/FuriHook/actions/runs/37945088658) 已通过：8 个核心测试、真实词典语料及 API 28/36 各 14 个 E2E。Windows API 35 的 Vector API 102 环境通过相同 14 个 E2E 和 1 个真实 Hook 测试，APK 校验与设备证据见 [设备验证](docs/DEVICE_VALIDATION.md)。
+版本 0.3.0 的 [Actions 38037040758](https://github.com/kongjianguan/FuriHook/actions/runs/38037040758) 已通过：8 个核心测试、真实词典语料及 API 28/36 各 14 个 E2E。Windows API 35 的 Vector API 102 环境通过相同 14 个 E2E 和 3 个真实 Hook 测试，覆盖 TextView、WebView 与 Compose。实际 Via 7.3.3 页面的动态更新和链接交互通过验证；WebView 测试应用的原文复制通过验证；Compose 的固定行高、两个段落与窗口像素检查通过验证。APK 校验与设备证据见 [设备验证](docs/DEVICE_VALIDATION.md)。
 
 本机构建需要 JDK 17 和 Android SDK 36；通过 `ANDROID_HOME` 或未跟踪的 `local.properties` 指定 SDK。
 
@@ -110,7 +110,7 @@ pwsh -NoProfile -File scripts/test_windows_emulator.ps1
 1. 安装两个 Debug APK。
 2. 在支持 libxposed API 102 的 LSPosed 管理器中启用 FuriHook。
 3. 选择默认作用域 `dev.furihook.testapp`，终止并重新启动测试应用。
-4. 通过框架日志或 `adb logcat -s FuriHook:I` 检查 `module_loaded`、`hook_registered`、`text_observed` 和 `ruby_applied`。Vector v2.2 的 Modern API 日志写入 Logcat。
+4. 通过框架日志或 `adb logcat -s FuriHook:I` 检查 `module_loaded`、`hook_registered`、`text_observed` 和 `ruby_applied`。WebView 与 Compose 分别记录 `webview_ruby_applied`、`compose_ruby_applied`；Compose 签名不支持时记录 `compose_unsupported`。Vector v2.2 的 Modern API 日志写入 Logcat。
 5. 更新动态文本，滚动列表，点击富文本并选择文字，确认宿主显示与交互保持正常。密码与输入框不应产生文本观测。
 
 作用域通过 LSPosed 管理器选择，`staticScope=false` 允许选择其他普通应用。本阶段跳过系统应用。启用作用域或更新 APK 后需要重新启动目标进程；自动热重载关闭。
@@ -121,9 +121,9 @@ pwsh -NoProfile -File scripts/test_windows_emulator.ps1
 
 自定义 TextView 子类完全覆盖目标方法且不调用父类时，基类 Hook 无法处理更新。Editable、PrecomputedText、转换控件和自定义 Canvas 绘制跳过注音。字符数组调用只有现有 Spannable 缓冲支持原地注音；模块不改变该入口的原始参数。
 
-Compose 适配核实了 1.10.6 的内部类和 JVM 方法签名。宿主对这些内部类或方法执行混淆、移除，或使用不同签名时，日志报告 `compose_unsupported`；此时无法保证该宿主文本注音。X 12.31.0 的 APK 和实际页面尚未在测试设备验证。WebView 适配处理当前主文档，iframe、Shadow DOM、关闭 JavaScript 的页面和浏览器自定义内核需要独立验证；过长文本节点仅分析有界前缀。
+Compose 适配核实了 1.10.6 的内部类和 JVM 方法签名。宿主对这些内部类或方法执行混淆、移除，或使用不同签名时，日志报告 `compose_unsupported`；此时无法保证该宿主文本注音。X 12.31.0 的 APK 和实际页面尚未在测试设备验证。WebView 适配处理当前主文档，iframe、Shadow DOM、关闭 JavaScript 的页面和浏览器自定义内核需要独立验证；长文本节点按每段最多 900 UTF-16 code unit 分批分析，段落切分可能影响词语识别。
 
-超过 2048 UTF-16 code unit 的尾部不会分析，`truncated` 明示该情况。视图状态或待处理集合达到 256 项上限时清理已有状态，后续文本更新重新建立状态。候选检测无法区分日语、中文、韩文中的 Han 字符；IPADIC 的歧义读音、专有名词和新词存在准确率限制。
+TextView 最多分析前 2048 UTF-16 code unit，`truncated` 明示该情况；Compose 跳过超过 2048 UTF-16 code unit 的段落。TextView 的视图状态或待处理集合达到 256 项上限时清理已有状态，后续文本更新重新建立状态。候选检测无法区分日语、中文、韩文中的 Han 字符；IPADIC 的歧义读音、专有名词和新词存在准确率限制。
 
 ReplacementSpan 将覆盖范围作为原子排版单位，词内光标粒度会减少，完整词不能跨行拆分。布局变化会重新检查可用宽度与字号；其他字体属性或词内样式在注音完成后发生变化时，需要额外验证。排版行为和保护规则见 [Ruby 渲染](docs/RUBY_RENDERER.md)，后台生命周期见 [TextView 管线](docs/TEXTVIEW_PIPELINE.md)。
 
