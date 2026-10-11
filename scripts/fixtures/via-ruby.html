@@ -57,6 +57,23 @@
         return inspection.annotations.filter((annotation) => ids.has(annotation.nodeId));
       }
 
+      function moduleRecordsForNode(node) {
+        const records = window.__FuriHook102 && window.__FuriHook102.records;
+        return records instanceof Map
+          ? Array.from(records.values()).filter((record) => record.node === node) : [];
+      }
+
+      function moduleCoverageForNode(inspection, node) {
+        const records = moduleRecordsForNode(node);
+        const nodeIds = new Set(records.map((record) => record.nodeId));
+        const annotations = inspection
+          ? inspection.annotations.filter((annotation) => nodeIds.has(annotation.nodeId)) : [];
+        return {recordCount: records.length,
+          analyzedSegmentCount: records.reduce((count, record) =>
+            count + (Array.isArray(record.segments) ? record.segments.length : 0), 0),
+          nodeIds: Array.from(nodeIds), annotationCount: annotations.length};
+      }
+
       function pairs(annotations) {
         return annotations.map((annotation) => `${annotation.baseText}:${annotation.reading}`);
       }
@@ -330,6 +347,11 @@
 
       function renderReport() {
         const inspection = hookInspection();
+        const originalNode = original.firstChild;
+        const editable = document.getElementById("excluded-editable");
+        const editableNode = editable.firstChild;
+        const originalCoverage = moduleCoverageForNode(inspection, originalNode);
+        const editableCoverage = moduleCoverageForNode(inspection, editableNode);
         const originalAnnotations = annotationsForText(inspection, original.textContent);
         const updatedAnnotations = annotationsForText(inspection, updated.textContent);
         const expectedUpdated = ["明日:あした", "図書館:としょかん", "行:い"];
@@ -354,6 +376,12 @@
           editableRubyCount: document.querySelectorAll("#excluded-editable ruby").length,
           inputValuePreserved: document.getElementById("excluded-input").value === "漢字入力",
           editableTextPreserved: baseText(document.getElementById("excluded-editable")) === "編集可能な漢字",
+          plainRecordCoverage: originalNode.nodeType === Node.TEXT_NODE && originalCoverage.recordCount > 0
+            && originalCoverage.analyzedSegmentCount > 0,
+          editableRecordCoverage: editableNode.nodeType === Node.TEXT_NODE
+            && editableCoverage.recordCount === 0 && editableCoverage.annotationCount === 0,
+          plainModuleCoverage: originalCoverage,
+          editableModuleCoverage: editableCoverage,
           existingRubyText: existing?.textContent || "",
           existingRubyOwned: existing?.hasAttribute("data-furihook-owned") || false,
           layoutIsClear: layoutIsClear(originalAnnotations),
@@ -374,19 +402,9 @@
           react: react,
           reactAnnotationPairs: pairs(reactAnnotations),
           reactListAnnotationPairs: pairs(reactRows.concat(reactAdded)),
-          overlaySummary: inspection ? {
-            generation: inspection.generation,
-            annotationCount: inspection.annotationCount,
-            visibleAnnotationCount: inspection.visibleAnnotationCount,
-            skippedOverlapCount: inspection.skippedOverlapCount,
-            skippedClippedCount: inspection.skippedClippedCount,
-            skippedOccludedCount: inspection.skippedOccludedCount,
-            analyzedSegmentCount: inspection.analyzedSegmentCount
-          } : null,
-          inputAndEditableExcluded: document.querySelectorAll(
-            "#excluded-input ruby[data-furihook-owned], #excluded-editable ruby[data-furihook-owned]"
-          ).length === 0 && document.querySelectorAll("#excluded-editable ruby").length === 0 &&
-            document.getElementById("excluded-input").value === "漢字入力",
+          inputAndEditableExcluded: editableNode.nodeType === Node.TEXT_NODE
+            && editableCoverage.recordCount === 0 && editableCoverage.annotationCount === 0
+            && document.getElementById("excluded-input").value === "漢字入力",
           existingRubyPreserved: Boolean(existing && existing.textContent === "漢かん" &&
             !existing.hasAttribute("data-furihook-owned"))
         };
@@ -394,7 +412,8 @@
             && (!updateRequested || report.updatedRubyMatch)) {
           report.phase = "ready";
         }
-        result.textContent = JSON.stringify(report);
+        const serialized = JSON.stringify(report);
+        if (result.textContent !== serialized) result.textContent = serialized;
       }
 
       document.getElementById("test-link").addEventListener("click", () => {

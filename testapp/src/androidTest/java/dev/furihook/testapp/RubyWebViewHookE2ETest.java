@@ -81,6 +81,7 @@ public final class RubyWebViewHookE2ETest {
             awaitJavascript(scenario,
                     "(function(){window.__e2eEditableNode=document.getElementById('editable').firstChild;return true})()");
             JSONObject initialPage = pageSnapshot(scenario);
+            assertEquals("きょう", initialPage.getString("fixtureOriginalReading"));
             assertTrue("日语正文必须包含生产引擎生成的读音记录",
                     hostTextHasRuby(scenario, "plain"));
             assertEquals("宿主初始 contenteditable 文本应保持fixture实际值",
@@ -349,7 +350,8 @@ public final class RubyWebViewHookE2ETest {
             assertFalse("宿主更新的 contenteditable 节点仍不得接受注音",
                     hostTextHasRuby(scenario, "editable"));
             assertEquals(1, excluded.getInt("fixtureRubyCount"));
-            assertEquals("かん", excluded.getString("fixtureOriginalReading"));
+            assertEquals(initialPage.getString("fixtureOriginalReading"),
+                    excluded.getString("fixtureOriginalReading"));
 
             clipboard.clearPrimaryClip();
             tap(scenario, "copy-button");

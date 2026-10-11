@@ -45,9 +45,14 @@ function Read-Vector {
 
 function Save-PageDump {
     param([string]$Name)
-    Invoke-Device @('shell', 'uiautomator', 'dump', "/sdcard/furihook-via-$Name.xml") | Out-Null
+    $remotePath = "/sdcard/furihook-via-$Name.xml"
+    $dumpOutput = (Invoke-Device @('shell', 'uiautomator', 'dump', $remotePath)) -join [Environment]::NewLine
+    $successPattern = '(?i)dumped to:\s*' + [regex]::Escape($remotePath) + '(?=\s|$)'
+    if ($dumpOutput -notmatch $successPattern) {
+        throw ('UIAutomator dump did not complete for ' + $remotePath + ': ' + $dumpOutput)
+    }
     $path = Join-Path $outputDirectory "via-$Name.xml"
-    Invoke-Device @('pull', "/sdcard/furihook-via-$Name.xml", $path) | Out-Null
+    Invoke-Device @('pull', $remotePath, $path) | Out-Null
     [xml]$document = Get-Content $path -Raw -Encoding UTF8
     return $document
 }
@@ -83,27 +88,82 @@ function Read-NodeBounds {
         Right = [int]$match.Groups[3].Value; Bottom = [int]$match.Groups[4].Value }
 }
 
+function Find-VisibleText {
+    param([xml]$Document, [string]$Text)
+    $webNode = $Document.SelectSingleNode("//node[@package='mark.via.gp' and @class='android.webkit.WebView']")
+    if (-not $webNode) { throw 'UIAutomator 没有找到 Via WebView 视口' }
+    $viewport = Read-NodeBounds $webNode
+    $node = $Document.SelectSingleNode("//node[@text='$Text' or @content-desc='$Text']")
+    if (-not $node) { return $null }
+    $bounds = Read-NodeBounds $node
+    $left = [Math]::Max($bounds.Left, $viewport.Left)
+    $right = [Math]::Min($bounds.Right, $viewport.Right)
+    $top = [Math]::Max($bounds.Top, $viewport.Top)
+    $bottom = [Math]::Min($bounds.Bottom, $viewport.Bottom)
+    if ($right - $left -lt 8 -or $bottom - $top -lt 8) { return $null }
+    return @{ Node = $node; Bounds = $bounds; Viewport = $viewport;
+        X = [int](($left + $right) / 2); Y = [int](($top + $bottom) / 2) }
+}
+
+function Scroll-TextIntoReadingViewport {
+    param([string]$Text, [ValidateSet('earlier', 'later')][string]$Direction,
+        [int]$ReadingTopMargin)
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        $document = Save-PageDump "scroll-$attempt"
+        $webNode = $document.SelectSingleNode("//node[@package='mark.via.gp' and @class='android.webkit.WebView']")
+        if (-not $webNode) { throw 'UIAutomator 没有找到 Via WebView 视口' }
+        $viewport = Read-NodeBounds $webNode
+        $node = $document.SelectSingleNode("//node[@text='$Text' or @content-desc='$Text']")
+        if (-not $node) {
+            $x = [int](($viewport.Left + $viewport.Right) / 2)
+            $upper = $viewport.Top + 60
+            $lower = $viewport.Bottom - 60
+            $from = if ($Direction -eq 'earlier') { $upper } else { $lower }
+            $to = if ($Direction -eq 'earlier') { $lower } else { $upper }
+            Invoke-Device @('shell', 'input', 'swipe', "$x", "$from", "$x", "$to", '350') | Out-Null
+            Start-Sleep -Milliseconds 350
+            continue
+        }
+        $bounds = Read-NodeBounds $node
+        $visible = Find-VisibleText $document $Text
+        $bottomMargin = 48
+        if ($visible -and $bounds.Top -ge ($viewport.Top + $readingTopMargin) -and
+            $bounds.Bottom -le ($viewport.Bottom - $bottomMargin)) {
+            return @{ Document = $document; Node = $node; Bounds = $bounds; Viewport = $viewport }
+        }
+
+        $x = [int](($viewport.Left + $viewport.Right) / 2)
+        $upper = $viewport.Top + 60
+        $lower = $viewport.Bottom - 60
+        if ($visible -and $bounds.Top -lt ($viewport.Top + $readingTopMargin)) {
+            $scrollEarlier = $true
+        } elseif ($bounds.Bottom -le $bounds.Top) {
+            $scrollEarlier = $Direction -eq 'earlier'
+        } else {
+            $scrollEarlier = $bounds.Bottom -le ($viewport.Top + $readingTopMargin)
+        }
+        $from = if ($scrollEarlier) { $upper } else { $lower }
+        $to = if ($scrollEarlier) { $lower } else { $upper }
+        Invoke-Device @('shell', 'input', 'swipe', "$x", "$from", "$x", "$to", '350') | Out-Null
+        Start-Sleep -Milliseconds 350
+    }
+    throw "沒有將正文滚动到可检查位置：$Text"
+}
+
 function Tap-VisibleText {
     param([string]$Text)
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
         $document = Save-PageDump 'tap-current'
+        $visible = Find-VisibleText $document $Text
+        if ($visible) {
+            Invoke-Device @('shell', 'input', 'tap', "$($visible.X)", "$($visible.Y)") | Out-Null
+            return
+        }
         $webNode = $document.SelectSingleNode("//node[@package='mark.via.gp' and @class='android.webkit.WebView']")
         if (-not $webNode) { throw 'UIAutomator 没有找到 Via WebView 视口' }
         $viewport = Read-NodeBounds $webNode
         $node = $document.SelectSingleNode("//node[@text='$Text' or @content-desc='$Text']")
         $bounds = if ($node) { Read-NodeBounds $node } else { $null }
-        if ($bounds) {
-            $left = [Math]::Max($bounds.Left, $viewport.Left)
-            $right = [Math]::Min($bounds.Right, $viewport.Right)
-            $top = [Math]::Max($bounds.Top, $viewport.Top)
-            $bottom = [Math]::Min($bounds.Bottom, $viewport.Bottom)
-            if ($right - $left -ge 8 -and $bottom - $top -ge 8) {
-                $x = [int](($left + $right) / 2)
-                $y = [int](($top + $bottom) / 2)
-                Invoke-Device @('shell', 'input', 'tap', "$x", "$y") | Out-Null
-                return
-            }
-        }
         $x = [int](($viewport.Left + $viewport.Right) / 2)
         $upper = $viewport.Top + 60
         $lower = $viewport.Bottom - 60
@@ -164,9 +224,14 @@ try {
     if ($initial.Report.originalText -ne '今日は学校で日本語を勉強します。' -or
         -not $initial.Report.layoutIsClear -or $initial.Report.visibleOriginalAnnotationCount -eq 0 -or
         -not $initial.Report.inputAndEditableExcluded -or -not $initial.Report.inputValuePreserved -or
-        -not $initial.Report.editableTextPreserved -or -not $initial.Report.existingRubyPreserved) {
+        -not $initial.Report.editableTextPreserved -or -not $initial.Report.existingRubyPreserved -or
+        -not $initial.Report.plainRecordCoverage -or -not $initial.Report.editableRecordCoverage) {
         throw '输入框、可编辑区域或原有 Ruby 排除检查失败'
     }
+    $initialOriginalVisible = Find-VisibleText $initial.Document '今日は学校で日本語を勉強します。'
+    if (-not $initialOriginalVisible) { throw '初始成功状态没有可读取的原文范围' }
+    $rubyTopMarginPx = $initialOriginalVisible.Bounds.Top - $initialOriginalVisible.Viewport.Top
+    if ($rubyTopMarginPx -le 0) { throw '初始成功状态的原文顶部间距无效' }
 
     Tap-VisibleText '显示日语原文'
     $reactOriginal = Wait-PageReport 'react-original' { param($report) $report.reactOriginalUpdated }
@@ -183,6 +248,41 @@ try {
 
     Tap-VisibleText 'Open link'
     $linked = Wait-PageReport 'linked' { param($report) $report.linkClickCount -eq 1 }
+    foreach ($pair in @('明日:あした', '図書館:としょかん', '行:い')) {
+        if ($pair -notin $linked.Report.updatedRubies) { throw "链接点击后更新正文缺少范围：$pair" }
+    }
+    if ($linked.Report.originalText -ne '今日は学校で日本語を勉強します。' -or
+        $linked.Report.updatedText -ne '明日は図書館へ行きます。' -or
+        -not $linked.Report.updatedRubyMatch -or -not $linked.Report.reactTranslationOnly -or
+        -not $linked.Report.reactListUpdated -or -not $linked.Report.plainRecordCoverage -or
+        -not $linked.Report.editableRecordCoverage -or $linked.Report.plainModuleCoverage.recordCount -eq 0 -or
+        $linked.Report.plainModuleCoverage.analyzedSegmentCount -ne 4 -or
+        $linked.Report.editableModuleCoverage.recordCount -ne 0) {
+        throw '链接点击后的文本或真实模块记录状态不正确'
+    }
+
+    Scroll-TextIntoReadingViewport '今日は学校で日本語を勉強します。' 'earlier' $rubyTopMarginPx | Out-Null
+    $originalVisible = Wait-PageReport 'original-ruby-visible' {
+        param($report) $report.originalRubyMatch -and $report.visibleOriginalAnnotationCount -gt 0
+    }
+    foreach ($pair in @('今日:きょう', '学校:がっこう', '日本語:にほんご', '勉強:べんきょう')) {
+        if ($pair -notin $originalVisible.Report.originalRubies) { throw "原文可视复验缺少范围：$pair" }
+    }
+    if (-not $originalVisible.Report.layoutIsClear -or
+        $originalVisible.Report.plainModuleCoverage.analyzedSegmentCount -ne 4 -or
+        $originalVisible.Report.plainModuleCoverage.annotationCount -eq 0) {
+        throw '原文滚动后的可见注音与生产记录检查失败'
+    }
+
+    Scroll-TextIntoReadingViewport '明日は図書館へ行きます。' 'later' $rubyTopMarginPx | Out-Null
+    $updatedVisible = Wait-PageReport 'updated-ruby-visible' {
+        param($report) $report.updateRequested -and $report.updatedRubyMatch
+    }
+    foreach ($pair in @('明日:あした', '図書館:としょかん', '行:い')) {
+        if ($pair -notin $updatedVisible.Report.updatedRubies) { throw "更新文可视复验缺少范围：$pair" }
+    }
+    if (-not $updatedVisible.Report.layoutIsClear) { throw '更新文滚动后的可见注音几何检查失败' }
+
     Save-PageDump 'final' | Out-Null
     $logs = Invoke-Device @('logcat', '-d', '-v', 'raw', '-s', 'FuriHook:I')
     $logs | Set-Content (Join-Path $outputDirectory 'via-logcat.txt') -Encoding utf8
@@ -195,13 +295,14 @@ try {
     })
     if ($applied.Count -eq 0) { throw 'Via WebView 没有记录实际 Ruby 注音应用事件' }
     if (@($events | Where-Object event -Match 'failed').Count -ne 0) { throw 'Via Hook 日志报告错误' }
-    if (-not $linked.Report.originalRubyMatch -or -not $linked.Report.updatedRubyMatch -or
-        -not $linked.Report.layoutIsClear -or
+    if (-not $linked.Report.updatedRubyMatch -or -not $originalVisible.Report.layoutIsClear -or
+        -not $updatedVisible.Report.layoutIsClear -or
         -not $reactOriginal.Report.reactOriginalUpdated -or
         -not $reactTranslation.Report.reactTranslationOnly -or
         -not $reactList.Report.reactListUpdated -or
         -not $linked.Report.inputAndEditableExcluded -or -not $linked.Report.inputValuePreserved -or
         -not $linked.Report.editableTextPreserved -or -not $linked.Report.existingRubyPreserved -or
+        -not $linked.Report.plainRecordCoverage -or -not $linked.Report.editableRecordCoverage -or
         $linked.Report.originalText -ne '今日は学校で日本語を勉強します。' -or
         $linked.Report.updatedText -ne '明日は図書館へ行きます。') {
         throw '最终网页状态没有通过完整 DOM 检查'
@@ -215,6 +316,18 @@ try {
         url = $url
         originalRubyPairs = $linked.Report.originalRubies
         updatedRubyPairs = $linked.Report.updatedRubies
+        visibleOriginalRubyPairs = $originalVisible.Report.originalRubies
+        visibleUpdatedRubyPairs = $updatedVisible.Report.updatedRubies
+        linkedOriginalRecord = $linked.Report.plainModuleCoverage
+        visibleOriginalAnnotations = $originalVisible.Report.visibleOriginalAnnotationCount
+        visibleUpdatedAnnotations = $updatedVisible.Report.updatedRubies.Count
+        rubyTopMarginPx = $rubyTopMarginPx
+        linkedOriginalAnnotationCount = $linked.Report.plainModuleCoverage.annotationCount
+        linkedEvidencePath = Join-Path $outputDirectory 'via-linked-page-report.json'
+        originalVisibleEvidencePath = Join-Path $outputDirectory 'via-original-visible-report.json'
+        updatedVisibleEvidencePath = Join-Path $outputDirectory 'via-updated-visible-report.json'
+        originalVisibleXmlPath = Join-Path $outputDirectory 'via-original-ruby-visible.xml'
+        updatedVisibleXmlPath = Join-Path $outputDirectory 'via-updated-ruby-visible.xml'
         reactTranslationNodePreserved = $reactTranslation.Report.react.postNodeIdentityPreserved
         reactTranslationParentPreserved = $reactTranslation.Report.react.postNodeParentPreserved
         reactTranslationTextUpdated = $reactTranslation.Report.react.postNodeData
@@ -223,7 +336,7 @@ try {
         reactListRemovedNodeDisconnected = $reactList.Report.react.removedRowDisconnected
         reactListRubyPairs = @($reactList.Report.reactListAnnotationPairs)
         reactProduction = $reactList.Report.react.reactProduction
-        rubyLayoutClear = $linked.Report.layoutIsClear
+        rubyLayoutClear = $originalVisible.Report.layoutIsClear -and $updatedVisible.Report.layoutIsClear
         linkClickCount = $linked.Report.linkClickCount
         inputAndEditableExcluded = $linked.Report.inputAndEditableExcluded
         existingRubyPreserved = $linked.Report.existingRubyPreserved
@@ -232,6 +345,9 @@ try {
         verifiedWithActualViaActivity = $true
     }
     $linked.Report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $outputDirectory 'via-page-report.json') -Encoding utf8
+    $linked.Report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $outputDirectory 'via-linked-page-report.json') -Encoding utf8
+    $originalVisible.Report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $outputDirectory 'via-original-visible-report.json') -Encoding utf8
+    $updatedVisible.Report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $outputDirectory 'via-updated-visible-report.json') -Encoding utf8
     $report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $outputDirectory 'via-verification.json') -Encoding utf8
     $report | ConvertTo-Json -Depth 5
 } finally {
