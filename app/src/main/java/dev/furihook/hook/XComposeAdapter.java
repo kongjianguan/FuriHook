@@ -104,6 +104,8 @@ public final class XComposeAdapter {
         private final Method maxWidth;
         private final Constructor<?> intrinsicsCacheConstructor;
         private final Constructor<?> intrinsicsConstructor;
+        private final Constructor<?> multiParagraphConstructor;
+        private final Method simpleCacheIntrinsics;
         private final Method annotatedMeasure;
         private final Method simpleMeasure;
 
@@ -130,8 +132,11 @@ public final class XComposeAdapter {
             intrinsicMeasurableClass = measurable;
             Class<?> measureResult = Class.forName("androidx.compose.ui.layout.b1", false, loader);
             Class<?> textStyle = Class.forName("androidx.compose.ui.text.c1", false, loader);
+            Class<?> textIntrinsics = Class.forName("androidx.compose.ui.text.e0", false, loader);
+            Class<?> annotatedString = Class.forName("androidx.compose.ui.text.h", false, loader);
             Class<?> fontResolver = Class.forName("androidx.compose.ui.text.font.i", false, loader);
             Class<?> density = Class.forName("androidx.compose.ui.unit.c", false, loader);
+            Class<?> layoutDirection = Class.forName("androidx.compose.ui.unit.m", false, loader);
 
             intrinsicsConstructor = intrinsicsClass.getDeclaredConstructor(String.class,
                     textStyle, List.class, List.class, fontResolver, density, boolean.class);
@@ -152,6 +157,13 @@ public final class XComposeAdapter {
                     "androidx.compose.foundation.text.modifiers.g", false, loader);
             simpleNodeCache = field(simpleNodeClass, "x", simpleCacheClass);
             simpleCacheClear = exactMethod(simpleCacheClass, "c", void.class);
+            simpleCacheIntrinsics = exactMethod(simpleCacheClass, "e", textIntrinsics,
+                    layoutDirection);
+            Class<?> multiParagraphClass = Class.forName("androidx.compose.ui.text.b0", false,
+                    loader);
+            multiParagraphConstructor = multiParagraphClass.getDeclaredConstructor(annotatedString,
+                    textStyle, fontResolver, density, List.class, boolean.class);
+            multiParagraphConstructor.setAccessible(true);
             nodeSelection = field(annotatedNodeClass, "y",
                     Class.forName("androidx.compose.foundation.text.modifiers.k", false, loader));
             annotatedStringPlainText = field(annotatedStringClass, "b", String.class);
@@ -185,6 +197,8 @@ public final class XComposeAdapter {
             List<XposedInterface.HookHandle> handles = new ArrayList<>();
             try {
                 boolean deoptimized = module.deoptimize(intrinsicsConstructor);
+                boolean simpleCallerDeoptimized = module.deoptimize(simpleCacheIntrinsics);
+                boolean multiCallerDeoptimized = module.deoptimize(multiParagraphConstructor);
                 handles.add(hook(intrinsicsConstructor, "paragraph-intrinsics",
                         chain -> afterIntrinsics(chain)));
                 handles.add(hook(annotatedMeasure, "annotated-measure",
@@ -194,7 +208,10 @@ public final class XComposeAdapter {
                 installIntrinsicHooks(handles, annotatedNodeClass, "annotated", true);
                 installIntrinsicHooks(handles, simpleNodeClass, "simple", false);
                 log.event("{\"event\":\"x_compose_hooks_registered\",\"nodes\":2"
-                        + ",\"constructorDeoptimized\":" + deoptimized + "}");
+                        + ",\"constructorDeoptimized\":" + deoptimized
+                        + ",\"simpleCallerDeoptimized\":" + simpleCallerDeoptimized
+                        + ",\"multiParagraphCallerDeoptimized\":"
+                        + multiCallerDeoptimized + "}");
                 return handles.toArray(new XposedInterface.HookHandle[0]);
             } catch (Throwable failure) {
                 for (XposedInterface.HookHandle handle : handles) {

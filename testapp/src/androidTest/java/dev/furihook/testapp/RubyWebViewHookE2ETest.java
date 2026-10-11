@@ -447,7 +447,7 @@ public final class RubyWebViewHookE2ETest {
         return "(function(){var state=window.__FuriHook102;var node=window.fixtureState.longNode;"
                 + "var paragraph=node.parentElement;"
                 + ("reader-area".equals(phase) ? "paragraph.style.cssText='box-sizing:border-box;width:100%;"
-                        + "overflow-x:auto;white-space:nowrap;padding:32px 0 4px;margin:14px 0';")
+                        + "overflow-x:auto;white-space:nowrap;padding:32px 0 4px;margin:14px 0';" : "")
                 + "var records=Array.from(state.records.values()).filter(function(record){"
                 + "return record.node===node&&record.segments!==null}).sort(function(a,b){return a.offset-b.offset});"
                 + "var segments=[],ranges=[];records.forEach(function(record){record.segments.forEach(function(segment){"

@@ -38,6 +38,10 @@ EXPECTED_METHODS = {
         "(Ljava/lang/String;Landroidx/compose/ui/text/c1;Ljava/util/List;"
         "Ljava/util/List;Landroidx/compose/ui/text/font/i;"
         "Landroidx/compose/ui/unit/c;Z)V",
+    ("Landroidx/compose/ui/text/b0;", "<init>"):
+        "(Landroidx/compose/ui/text/h;Landroidx/compose/ui/text/c1;"
+        "Landroidx/compose/ui/text/font/i;Landroidx/compose/ui/unit/c;"
+        "Ljava/util/List;Z)V",
     ("Landroidx/compose/ui/text/android/m;", "<init>"):
         "(Ljava/lang/CharSequence;Landroid/text/TextPaint;I)V",
     ("Landroidx/compose/foundation/text/modifiers/u;", "u1"):
@@ -54,9 +58,12 @@ EXPECTED_METHODS = {
     ("Landroidx/compose/ui/node/d;", "i"):
         "(Landroidx/compose/ui/node/o;)V",
     ("Landroidx/compose/foundation/text/modifiers/g;", "c"): "()V",
+    ("Landroidx/compose/foundation/text/modifiers/g;", "e"):
+        "(Landroidx/compose/ui/unit/m;)Landroidx/compose/ui/text/e0;",
 }
 EXPECTED_CLASSES = {
     "Landroidx/compose/ui/text/b;",
+    "Landroidx/compose/ui/text/b0;",
     "Landroidx/compose/foundation/text/modifiers/u;",
     "Landroidx/compose/foundation/text/modifiers/y;",
     "Landroidx/compose/ui/text/h;",
@@ -87,6 +94,7 @@ CALLER_OWNERS = {
     "Landroidx/compose/foundation/text/e1;",
     "Landroidx/compose/foundation/text/modifiers/r;",
     "Landroidx/compose/foundation/text/modifiers/v;",
+    "Landroidx/compose/foundation/text/modifiers/g;",
     "Landroidx/compose/ui/text/b0;",
     "Landroidx/compose/foundation/text/modifiers/u;",
     "Landroidx/compose/foundation/text/modifiers/y;",
@@ -261,6 +269,13 @@ def verify(apks_path, output_path):
         if site["caller"].startswith("Landroidx/compose/ui/text/b0;-><init>(")
         and site["target"].startswith("Landroidx/compose/ui/text/b;-><init>(")
     ]
+    simple_paragraph_creation = [
+        site for site in call_sites
+        if site["caller"].startswith(
+            "Landroidx/compose/foundation/text/modifiers/g;->e(")
+        and normalize_descriptor(site["target"]).startswith(
+            "Landroidx/compose/ui/text/b;-><init>(")
+    ]
     if not business_chain or not material_to_foundation or not foundation_to_nodes:
         raise AssertionError(
             "缺少X正文到Compose Foundation文本节点的调用链证据："
@@ -273,7 +288,10 @@ def verify(apks_path, output_path):
                                        and "foundation" in site["target"]][:12]}))
     if not paragraph_creation:
         raise AssertionError("缺少多段落文本创建ParagraphIntrinsics的调用证据")
-    evidence = business_chain + material_to_foundation + foundation_to_nodes + paragraph_creation
+    if not simple_paragraph_creation:
+        raise AssertionError("缺少simple ParagraphLayoutCache创建ParagraphIntrinsics的调用证据")
+    evidence = (business_chain + material_to_foundation + foundation_to_nodes
+                + paragraph_creation + simple_paragraph_creation)
 
     report = {
         "apks": str(apks_path),
@@ -287,6 +305,7 @@ def verify(apks_path, output_path):
             "materialTextToFoundationText": material_to_foundation,
             "foundationTextToModifierNodes": foundation_to_nodes,
             "multiParagraphIntrinsicsCreation": paragraph_creation,
+            "simpleParagraphLayoutCacheCreation": simple_paragraph_creation,
         },
         "staticContractVerified": True,
         "runtimeHookVerified": False,
