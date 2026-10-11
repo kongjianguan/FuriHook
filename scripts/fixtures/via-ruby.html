@@ -34,8 +34,10 @@
       const original = document.getElementById("original");
       const updated = document.getElementById("updated");
       const linkCount = document.getElementById("link-count");
-        const expectedOriginal = ["今日:きょう", "学校:がっこう", "日本語:にほんご", "勉強:べんきょう"];
+      const diagnosticRequested = new URLSearchParams(window.location.search).get("diagnostic") === "1";
+      const expectedOriginal = ["今日:きょう", "学校:がっこう", "日本語:にほんご", "勉強:べんきょう"];
       let updateRequested = false;
+      let diagnosticStarted = false;
 
       function baseText(element) {
         const clone = element.cloneNode(true);
@@ -45,7 +47,7 @@
 
       function hookInspection() {
         return window.FuriHook102 && typeof window.FuriHook102.inspect === "function"
-          ? window.FuriHook102.inspect() : null;
+          ? JSON.parse(window.FuriHook102.inspect(diagnosticRequested)) : null;
       }
 
       function annotationsForText(inspection, text) {
@@ -67,6 +69,247 @@
         return annotations.filter((annotation) => annotation.visible).every((annotation) =>
           annotation.clearance === "clear" && annotation.readingRect.bottom <= annotation.baseRect.top
             && annotation.textRects.every((rect) => !rectanglesIntersect(annotation.readingRect, rect)));
+      }
+
+      function rectData(rect) {
+        return {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+          width: rect.width, height: rect.height};
+      }
+
+      function styleData(element) {
+        const style = getComputedStyle(element);
+        return {display: style.display, position: style.position, font: style.font,
+          fontFamily: style.fontFamily, fontSize: style.fontSize, fontWeight: style.fontWeight,
+          fontStyle: style.fontStyle, lineHeight: style.lineHeight, letterSpacing: style.letterSpacing,
+          writingMode: style.writingMode, transform: style.transform, zoom: style.zoom,
+          overflowX: style.overflowX, overflowY: style.overflowY, color: style.color,
+          backgroundColor: style.backgroundColor, backgroundImage: style.backgroundImage,
+          border: style.border, opacity: style.opacity, visibility: style.visibility};
+      }
+
+      function nodeRanges(element) {
+        const output = [];
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          if (!node.data.length) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          output.push({text: node.data, length: node.data.length,
+            rects: Array.from(range.getClientRects(), rectData)});
+        }
+        return output;
+      }
+
+      function clipChain(node) {
+        const chain = [];
+        let element = node.parentElement;
+        while (element) {
+          const style = getComputedStyle(element);
+          const clips = [style.overflowX, style.overflowY].some((value) =>
+            value === "auto" || value === "scroll" || value === "hidden" || value === "clip");
+          if (clips) {
+            const box = element.getBoundingClientRect();
+            const left = box.left + element.clientLeft;
+            const top = box.top + element.clientTop;
+            chain.push({tag: element.tagName, id: element.id, className: String(element.className || ""),
+              box: rectData(box), clientBox: {left, top, right: left + element.clientWidth,
+                bottom: top + element.clientHeight, width: element.clientWidth, height: element.clientHeight},
+              style: styleData(element)});
+          }
+          element = element.parentElement;
+        }
+        return chain;
+      }
+
+      function hitStack(rect) {
+        const insetX = Math.min(1, rect.width / 4);
+        const insetY = Math.min(1, rect.height / 4);
+        const points = [
+          [rect.left + rect.width / 2, rect.top + rect.height / 2],
+          [rect.left + insetX, rect.top + insetY],
+          [rect.right - insetX, rect.top + insetY],
+          [rect.left + insetX, rect.bottom - insetY],
+          [rect.right - insetX, rect.bottom - insetY]
+        ];
+        return points.map(([x, y]) => ({x, y,
+          elements: document.elementsFromPoint(x, y).slice(0, 8).map((element) => {
+            const box = element.getBoundingClientRect();
+            return {tag: element.tagName, id: element.id,
+              className: String(element.className || "").slice(0, 160),
+              text: (element.textContent || "").slice(0, 100), style: styleData(element),
+              rect: rectData(box)};
+          })}));
+      }
+
+      function characterGeometry(element) {
+        const node = element.firstChild;
+        if (!node || node.nodeType !== Node.TEXT_NODE) {
+          throw new Error("诊断正文必须保留一个真实 Text 节点");
+        }
+        const source = node.data;
+        const style = styleData(element);
+        const clipAncestors = clipChain(node);
+        const viewport = {left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight,
+          width: window.innerWidth, height: window.innerHeight};
+        const characters = [];
+        const segments = [];
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        const state = window.__FuriHook102;
+        if (state && state.records instanceof Map) {
+          for (const record of state.records.values()) {
+            if (record.node !== node || !record.segments) continue;
+            for (const segment of record.segments) {
+              const start = record.offset + segment[0];
+              const end = record.offset + segment[1];
+              const range = document.createRange();
+              range.setStart(node, start);
+              range.setEnd(node, end);
+              const base = range.getBoundingClientRect();
+              const rubySize = Math.max(8, Number.parseFloat(style.fontSize) * 0.5);
+              context.font = `${style.fontStyle} ${style.fontWeight} ${rubySize}px ${style.fontFamily}`;
+              const acceptedReadingFont = context.font;
+              const readingMetrics = context.measureText(segment[2]);
+              context.font = style.font;
+              const acceptedBaseFont = context.font;
+              const baseMetrics = context.measureText(node.data.slice(start, end));
+              const scaleX = baseMetrics.width > 0 ? base.width / baseMetrics.width : 1;
+              const readingWidth = readingMetrics.width * scaleX;
+              const height = Math.max(rubySize,
+                readingMetrics.actualBoundingBoxAscent + readingMetrics.actualBoundingBoxDescent);
+              const gap = Math.max(1, rubySize * 0.16);
+              const candidate = {left: (base.left + base.right - readingWidth) / 2,
+                right: (base.left + base.right + readingWidth) / 2,
+                top: base.top - height - gap, bottom: base.top - gap,
+                width: readingWidth, height};
+              segments.push({startUtf16: start, endUtf16: end,
+                baseText: node.data.slice(start, end), reading: segment[2],
+                baseRect: rectData(base), baseRects: Array.from(range.getClientRects(), rectData),
+                rubySize, acceptedReadingFont, acceptedBaseFont, scaleX,
+                readingInkAscent: readingMetrics.actualBoundingBoxAscent,
+                readingInkDescent: readingMetrics.actualBoundingBoxDescent,
+                candidateReadingArea: candidate, candidateAreaHitStack: hitStack(candidate)});
+            }
+          }
+        }
+        let offset = 0;
+        for (const character of source) {
+          const startUtf16 = offset;
+          offset += character.length;
+          if (!/\p{Script=Han}/u.test(character)) continue;
+          const range = document.createRange();
+          range.setStart(node, startUtf16);
+          range.setEnd(node, offset);
+          const rects = Array.from(range.getClientRects(), rectData);
+          const rangeBox = range.getBoundingClientRect();
+          const fontSize = Number.parseFloat(style.fontSize);
+          const probeHeight = fontSize * 0.5;
+          const probe = {left: (rangeBox.left + rangeBox.right) / 2 - rangeBox.width / 2,
+            right: (rangeBox.left + rangeBox.right) / 2 + rangeBox.width / 2,
+            top: rangeBox.top - probeHeight - Math.max(1, fontSize * 0.16),
+            bottom: rangeBox.top - Math.max(1, fontSize * 0.16),
+            width: rangeBox.width, height: probeHeight};
+          let clipped = {left: Math.max(rangeBox.left, viewport.left),
+            top: Math.max(rangeBox.top, viewport.top), right: Math.min(rangeBox.right, viewport.right),
+            bottom: Math.min(rangeBox.bottom, viewport.bottom)};
+          for (const ancestor of clipAncestors) {
+            clipped.left = Math.max(clipped.left, ancestor.clientBox.left);
+            clipped.top = Math.max(clipped.top, ancestor.clientBox.top);
+            clipped.right = Math.min(clipped.right, ancestor.clientBox.right);
+            clipped.bottom = Math.min(clipped.bottom, ancestor.clientBox.bottom);
+          }
+          characters.push({character, startUtf16, endUtf16: offset, rect: rectData(rangeBox), rects,
+            viewportIntersection: clipped, fullyVisible: clipped.left <= rangeBox.left
+              && clipped.top <= rangeBox.top && clipped.right >= rangeBox.right
+              && clipped.bottom >= rangeBox.bottom,
+            candidateReadingArea: probe, candidateAreaHitStack: hitStack(probe),
+            font: style, clipAncestors});
+        }
+        return {text: source, nodeLengthUtf16: source.length,
+          nodeIdentity: node === element.firstChild && node.parentNode === element,
+          parentTag: element.tagName, parentId: element.id, elementStyle: style,
+          range: rectData(element.getBoundingClientRect()), characters, productionSegments: segments};
+      }
+
+      function neighboringRanges(element) {
+        const previous = element.previousElementSibling;
+        const next = element.nextElementSibling;
+        const heading = document.querySelector("h1");
+        return {
+          heading: heading ? {tag: heading.tagName, id: heading.id,
+            style: styleData(heading), range: rectData(heading.getBoundingClientRect()),
+            textRanges: nodeRanges(heading)} : null,
+          previous: previous ? {tag: previous.tagName, id: previous.id,
+            style: styleData(previous), range: rectData(previous.getBoundingClientRect()),
+            textRanges: nodeRanges(previous)} : null,
+          next: next ? {tag: next.tagName, id: next.id,
+            style: styleData(next), range: rectData(next.getBoundingClientRect()),
+            textRanges: nodeRanges(next)} : null
+        };
+      }
+
+      function stableDiagnosticCapture() {
+        if (diagnosticStarted) return;
+        const inspection = hookInspection();
+        if (!inspection || !inspection.scan?.initialDone || inspection.scan.awaitingReadings !== 0
+            || inspection.scan.pendingBatches !== 0 || !window.reactFixture) {
+          requestAnimationFrame(stableDiagnosticCapture);
+          return;
+        }
+        diagnosticStarted = true;
+        const initialSignature = JSON.stringify({rect: rectData(original.getBoundingClientRect()),
+          annotations: inspection.annotationCount, passes: inspection.layoutPasses,
+          text: original.firstChild?.data});
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const current = hookInspection();
+          const signature = JSON.stringify({rect: rectData(original.getBoundingClientRect()),
+            annotations: current.annotationCount, passes: current.layoutPasses,
+            text: original.firstChild?.data});
+          if (!current.scan?.initialDone || current.scan.awaitingReadings !== 0
+              || current.scan.pendingBatches !== 0 || signature !== initialSignature) {
+            diagnosticStarted = false;
+            requestAnimationFrame(stableDiagnosticCapture);
+            return;
+          }
+          const initialOriginal = characterGeometry(original);
+          const initialNeighbors = neighboringRanges(original);
+          const initialInspection = current;
+          const initialReact = window.reactFixture.inspect();
+          window.reactFixture.setMode("original");
+          waitForReactLayout(initialOriginal, initialNeighbors, initialInspection, initialReact);
+        }));
+      }
+
+      function waitForReactLayout(initialOriginal, initialNeighbors, initialInspection, initialReact) {
+        requestAnimationFrame(() => {
+          const react = window.reactFixture.inspect();
+          const inspection = hookInspection();
+          if (react.mode !== "original" || !inspection?.scan?.initialDone
+              || inspection.scan.awaitingReadings !== 0 || inspection.scan.pendingBatches !== 0) {
+            waitForReactLayout(initialOriginal, initialNeighbors, initialInspection, initialReact);
+            return;
+          }
+          const reactElement = document.getElementById("react-current");
+          const reactGeometry = characterGeometry(reactElement);
+          const annotations = inspection.annotations.filter((item) =>
+            item.nodeId === inspection.hostNodes.find((node) =>
+              node.connected && node.data === react.postText)?.nodeId);
+          const report = {phase: "diagnostic-ready", mode: "actual-via-layout",
+            capturedAt: new Date().toISOString(), url: window.location.href,
+            viewport: {innerWidth: window.innerWidth, innerHeight: window.innerHeight,
+              devicePixelRatio: window.devicePixelRatio,
+              visualViewport: window.visualViewport ? {offsetLeft: window.visualViewport.offsetLeft,
+                offsetTop: window.visualViewport.offsetTop, width: window.visualViewport.width,
+                height: window.visualViewport.height, scale: window.visualViewport.scale} : null},
+            initialOriginal: initialOriginal, initialNeighbors: initialNeighbors,
+            initialInspection: initialInspection, initialReact: initialReact,
+            reactOriginal: react, reactOriginalGeometry: reactGeometry,
+            reactOriginalNeighbors: neighboringRanges(reactElement),
+            reactOriginalInspection: inspection, reactOriginalAnnotations: annotations,
+            inspectionRejections: inspection.rejections || null};
+          result.textContent = JSON.stringify(report);
+        });
       }
 
       function renderReport() {
@@ -148,8 +391,13 @@
         renderReport();
       });
       window.fixtureReport = renderReport;
-      setInterval(renderReport, 250);
-      renderReport();
+      if (diagnosticRequested) {
+        result.textContent = JSON.stringify({phase: "diagnostic-waiting"});
+        stableDiagnosticCapture();
+      } else {
+        setInterval(renderReport, 250);
+        renderReport();
+      }
     })();
   </script>
   <script src="vendor/react-18.3.1.production.min.js"></script>

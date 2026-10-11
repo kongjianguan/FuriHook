@@ -1,7 +1,8 @@
 param(
     [string]$Sdk = 'C:\Users\he\AppData\Local\Android\Sdk',
     [string]$Workspace = 'D:\workspace\furihook-validation',
-    [string]$Serial = 'emulator-5580'
+    [string]$Serial = 'emulator-5580',
+    [switch]$Diagnostic
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,6 +10,7 @@ $adb = Join-Path $Sdk 'platform-tools\adb.exe'
 $outputDirectory = Join-Path $Workspace 'results\via'
 $fixtureDirectory = Join-Path $Workspace 'host-compatibility'
 $url = 'http://127.0.0.1:18765/via-ruby.html'
+if ($Diagnostic) { $url += '?diagnostic=1' }
 New-Item -ItemType Directory -Force $outputDirectory | Out-Null
 foreach ($fixture in @(
     'via-ruby.html',
@@ -97,6 +99,21 @@ try {
     $launch = Invoke-Device @('shell', 'am', 'start', '-W', '-a', 'android.intent.action.VIEW',
         '-n', 'mark.via.gp/mark.via.Trampoline', '-d', $url)
     if (-not (($launch -join "`n").Contains('Status: ok'))) { throw 'Via 浏览器没有打开测试页面' }
+
+    if ($Diagnostic) {
+        $diagnostic = Wait-PageReport 'layout-diagnostic' {
+            param($report) $report.phase -eq 'diagnostic-ready'
+        }
+        $diagnostic.Report | ConvertTo-Json -Depth 40 |
+            Set-Content (Join-Path $outputDirectory 'via-layout-diagnostic.json') -Encoding utf8
+        if ($diagnostic.Report.initialOriginal.characters.Count -eq 0 -or
+            $diagnostic.Report.initialInspection.generation -lt 0 -or
+            $diagnostic.Report.reactOriginalGeometry.characters.Count -eq 0) {
+            throw 'Via 实际布局诊断没有包含原文 Range、React 原文 Range 或生产 inspect 数据'
+        }
+        $diagnostic.Report | ConvertTo-Json -Depth 40
+        return
+    }
 
     $initial = Wait-PageReport 'initial' { param($report) $report.originalRubyMatch -and $report.reactTranslationOnly }
     foreach ($pair in @('今日:きょう', '学校:がっこう', '日本語:にほんご', '勉強:べんきょう')) {

@@ -183,11 +183,16 @@ public final class RubyWebViewHookE2ETest {
                             + " && document.getElementById('dynamic').textContent==='" + UPDATED + "'"
                             + " && " + hostHasAnyAnnotationCondition(UPDATED));
             JSONObject afterDynamic = pageSnapshot(scenario);
+            JSONObject afterDynamicInspection = inspect(scenario);
+            saveEvidence(scenario, new JSONObject()
+                    .put("stage", "dynamic-text-update")
+                    .put("page", afterDynamic)
+                    .put("inspection", afterDynamicInspection));
             assertEquals(UPDATED, afterDynamic.getString("dynamicText"));
             assertTrue("宿主动态更新必须写入同一个原始 Text 节点",
                     afterDynamic.getBoolean("dynamicNodeIdentityPreserved"));
             assertMatchesProductionEngine(UPDATED,
-                    annotationsForText(inspect(scenario), UPDATED));
+                    annotationsForText(afterDynamicInspection, UPDATED));
 
             JSONObject excluded = pageSnapshot(scenario);
             assertEquals("編集可能な漢字", excluded.getString("editableText"));
@@ -712,6 +717,7 @@ public final class RubyWebViewHookE2ETest {
                         + "return JSON.stringify({plainText:p.textContent,"
                         + "plainNodeIdentityPreserved:f.plainNode===p.firstChild&&p.childNodes.length===1&&f.plainNode.parentNode===p,"
                         + "dynamicText:d.textContent,"
+                        + "dynamicNodeIdentityPreserved:f.dynamicNode===d.firstChild&&d.childNodes.length===1&&f.dynamicNode.parentNode===d,"
                         + "editableText:e.textContent,passwordType:document.getElementById('password').type,"
                         + "passwordValue:document.getElementById('password').value,"
                         + "linkText:document.getElementById('link').textContent,"

@@ -17,6 +17,8 @@
   const KANA = /[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9d]/u;
   const SKIP = "script,style,noscript,template,textarea,input,select,option,button,code,pre,ruby,rt,rp";
   const OWNED = "[data-furihook-owned='1']";
+  const PAINTED_TAGS = new Set(["img", "svg", "canvas", "video", "audio", "iframe", "object", "embed",
+    "button", "input", "select", "textarea", "option", "meter", "progress", "output", "fieldset"]);
   const XHTML = "http://www.w3.org/1999/xhtml";
   const VIEWPORT_MARGIN = 24;
   const measureContext = document.createElement("canvas").getContext("2d");
@@ -61,12 +63,18 @@
       scanPending: false,
       animationPending: false,
       hidden: document.visibilityState === "hidden",
+      layoutRejections: [],
+      textRectSources: new WeakMap(),
       stats: {layoutPasses: 0, skippedOverlapCount: 0, skippedClippedCount: 0,
         skippedOccludedCount: 0, skippedGeometryCount: 0, staleResultCount: 0}
     };
 
     function rootElement() {
       return document.documentElement;
+    }
+
+    function noteRejection(rejection) {
+      if (state.layoutRejections.length < 128) state.layoutRejections.push(rejection);
     }
 
     function ensureOverlay() {
@@ -462,7 +470,11 @@
         const range = document.createRange();
         range.selectNodeContents(node);
         for (const rect of range.getClientRects()) {
-          if (rect.width > 0 && rect.height > 0) rects.push(rectObject(rect));
+          if (rect.width > 0 && rect.height > 0) {
+            const geometry = rectObject(rect);
+            state.textRectSources.set(geometry, {node: node, parent: node.parentElement});
+            rects.push(geometry);
+          }
         }
       }
       return rects;
@@ -541,16 +553,22 @@
       return {x: x, y: y};
     }
 
-    function intersectsAny(rect, rects) {
-      for (const other of rects) if (intersects(rect, other)) return true;
-      return false;
+    function firstIntersection(rect, rects) {
+      for (const other of rects) if (intersects(rect, other)) return other;
+      return null;
     }
 
     function isClipped(rect, clip) {
       return rect.left < clip.left || rect.right > clip.right || rect.top < clip.top || rect.bottom > clip.bottom;
     }
 
-    function isOccluded(rect, node, block) {
+    function isTransparentColor(color) {
+      if (color === "transparent") return true;
+      const match = /^rgba\([^)]*,\s*([+-]?(?:\d+\.?\d*|\.\d+))\s*\)$/.exec(color);
+      return Boolean(match && Number(match[1]) === 0);
+    }
+
+    function occlusionEvidence(rect, node, block, region) {
       const points = [
         [(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2],
         [rect.left + rect.width * 0.2, rect.top + rect.height * 0.2],
@@ -560,13 +578,27 @@
       ];
       for (const point of points) {
         const hits = document.elementsFromPoint(point[0], point[1]);
-        const top = hits.find(element => !element.matches(OWNED));
-        if (!top) return true;
-        if (top !== node.parentElement && !top.contains(node) && !top.contains(block)) return true;
-        const style = getComputedStyle(top);
-        if (style.backgroundImage !== "none" && top !== node.parentElement && !top.contains(node)) return true;
+        for (const hit of hits) {
+          if (hit.matches(OWNED) || hit === node.parentElement || hit.contains(node) || hit.contains(block)) continue;
+          const style = getComputedStyle(hit);
+          const sameRegion = hit === region || region.contains(hit);
+          const hasBorder = (style.borderTopStyle !== "none" && Number.parseFloat(style.borderTopWidth) > 0
+              && !isTransparentColor(style.borderTopColor))
+            || (style.borderRightStyle !== "none" && Number.parseFloat(style.borderRightWidth) > 0
+              && !isTransparentColor(style.borderRightColor))
+            || (style.borderBottomStyle !== "none" && Number.parseFloat(style.borderBottomWidth) > 0
+              && !isTransparentColor(style.borderBottomColor))
+            || (style.borderLeftStyle !== "none" && Number.parseFloat(style.borderLeftWidth) > 0
+              && !isTransparentColor(style.borderLeftColor));
+          const hasPaintedSurface = style.backgroundImage !== "none"
+            || !isTransparentColor(style.backgroundColor)
+            || style.boxShadow !== "none"
+            || hasBorder || PAINTED_TAGS.has(hit.localName);
+          if (sameRegion && !hasPaintedSurface) continue;
+          return {point: point, blocker: hit, hits: hits};
+        }
       }
-      return false;
+      return null;
     }
 
     function segmentRects(record, segment) {
@@ -595,6 +627,8 @@
       const layer = state.layer || overlay;
       layer.replaceChildren();
       state.labelElements.clear();
+      state.layoutRejections = [];
+      state.textRectSources = new WeakMap();
       for (const record of state.records.values()) record.labels = [];
       const occupancyByRoot = new Map();
       const labelRects = [];
@@ -616,6 +650,7 @@
         }
         if (!occupied) {
           state.stats.skippedGeometryCount++;
+          noteRejection({reason: "geometry-limit", record: record, region: region});
           continue;
         }
         const clip = clippingRect(record.node, viewport);
@@ -626,7 +661,11 @@
               || segment[1] > record.text.length || typeof segment[2] !== "string" || !segment[2]) continue;
           const fragments = segmentRects(record, segment);
           if (fragments.length !== 1) {
-            if (fragments.length > 1) state.stats.skippedGeometryCount++;
+            if (fragments.length > 1) {
+              state.stats.skippedGeometryCount++;
+              noteRejection({reason: "multiple-fragments", record: record, segment: segment,
+                baseRects: fragments.map(rectObject)});
+            }
             continue;
           }
           const base = fragments[0];
@@ -635,6 +674,8 @@
           const font = textStyle(record.node.parentElement);
           if (font.writingMode !== "horizontal-tb" || hasUnsupportedTransform(record.node.parentElement)) {
             state.stats.skippedGeometryCount++;
+            noteRejection({reason: "unsupported-geometry", record: record, segment: segment,
+              baseRect: rectObject(base), writingMode: font.writingMode});
             continue;
           }
           const baseText = record.text.slice(segment[0], segment[1]);
@@ -658,16 +699,28 @@
           if (isClipped(labelRect, clip) || isClipped(labelRect, viewport)) {
             label.remove();
             state.stats.skippedClippedCount++;
+            noteRejection({reason: "clipped", record: record, segment: segment,
+              baseRect: rectObject(base), readingRect: labelRect, clip: clip});
             continue;
           }
-          if (intersectsAny(labelRect, occupied) || intersectsAny(labelRect, labelRects)) {
+          const overlappingTextRect = firstIntersection(labelRect, occupied);
+          const overlappingLabelRect = firstIntersection(labelRect, labelRects);
+          if (overlappingTextRect || overlappingLabelRect) {
             label.remove();
             state.stats.skippedOverlapCount++;
+            noteRejection({reason: overlappingTextRect ? "text-overlap" : "label-overlap",
+              record: record, segment: segment, baseRect: rectObject(base), readingRect: labelRect,
+              overlappingTextRect: overlappingTextRect,
+              overlappingTextSource: overlappingTextRect ? state.textRectSources.get(overlappingTextRect) || null : null,
+              overlappingLabelRect: overlappingLabelRect});
             continue;
           }
-          if (isOccluded(labelRect, record.node, record.parent)) {
+          const occlusion = occlusionEvidence(labelRect, record.node, record.parent, region);
+          if (occlusion) {
             label.remove();
             state.stats.skippedOccludedCount++;
+            noteRejection({reason: "occluded", record: record, segment: segment,
+              baseRect: rectObject(base), readingRect: labelRect, occlusion: occlusion});
             continue;
           }
           const key = record.id + ":" + segment[0] + ":" + segment[1];
@@ -764,7 +817,48 @@
       if (batch.items.length) state.batches.push(batch);
       if (batch.more) scheduleScan();
     };
-    state.inspect = function () {
+    function inspectElement(element) {
+      if (!element || element.nodeType !== 1) return null;
+      const style = getComputedStyle(element);
+      const borderBox = element.getBoundingClientRect();
+      return {tag: element.tagName, id: element.id || "", className: String(element.className || "").slice(0, 120),
+        textSample: (element.textContent || "").slice(0, 120), rect: rectObject(borderBox),
+        display: style.display, visibility: style.visibility, opacity: style.opacity,
+        color: style.color, fontSize: style.fontSize, lineHeight: style.lineHeight,
+        pointerEvents: style.pointerEvents, backgroundColor: style.backgroundColor,
+        backgroundImage: style.backgroundImage, boxShadow: style.boxShadow,
+        borderTopColor: style.borderTopColor, borderTopWidth: style.borderTopWidth};
+    }
+    function inspectTextSource(source) {
+      if (!source || !source.node) return null;
+      return {nodeId: nodeId(source.node), textSample: source.node.data.slice(0, 160),
+        parent: inspectElement(source.parent)};
+    }
+    function inspectRejection(rejection) {
+      const record = rejection.record;
+      const result = {reason: rejection.reason, nodeId: record.nodeId,
+        segmentStart: rejection.segment ? record.offset + rejection.segment[0] : record.offset,
+        segmentEnd: rejection.segment ? record.offset + rejection.segment[1] : record.offset + record.text.length,
+        targetText: rejection.segment
+          ? record.node.data.slice(record.offset + rejection.segment[0], record.offset + rejection.segment[1])
+          : record.text,
+        reading: rejection.segment ? rejection.segment[2] : "",
+        baseRect: rejection.baseRect || null, readingRect: rejection.readingRect || null,
+        clip: rejection.clip || null, baseRects: rejection.baseRects || null,
+        writingMode: rejection.writingMode || ""};
+      if (rejection.overlappingTextRect) {
+        result.overlappingTextRects = [{rect: rejection.overlappingTextRect,
+          source: inspectTextSource(rejection.overlappingTextSource)}];
+      }
+      if (rejection.overlappingLabelRect) result.overlappingLabelRects = [rejection.overlappingLabelRect];
+      if (rejection.occlusion) {
+        result.occlusion = {point: rejection.occlusion.point,
+          blocker: inspectElement(rejection.occlusion.blocker),
+          hits: rejection.occlusion.hits.map(inspectElement)};
+      }
+      return result;
+    }
+    state.inspect = function (includeDiagnostics) {
       const viewport = visibleViewport();
       const annotations = [];
       const hostNodes = new Map();
@@ -798,6 +892,7 @@
         skippedOverlapCount: state.stats.skippedOverlapCount, skippedClippedCount: state.stats.skippedClippedCount,
         skippedOccludedCount: state.stats.skippedOccludedCount, skippedGeometryCount: state.stats.skippedGeometryCount,
         staleResultCount: state.stats.staleResultCount, layoutPasses: state.stats.layoutPasses,
+        rejections: includeDiagnostics ? state.layoutRejections.map(inspectRejection) : [],
         devicePixelRatio: window.devicePixelRatio || 1,
         visualViewport: {offsetLeft: viewport.left, offsetTop: viewport.top, width: viewport.width,
           height: viewport.height, scale: viewport.scale},
@@ -899,8 +994,8 @@
       if (!window.__FuriHook102) return;
       window.__FuriHook102.drop(JSON.parse(json));
     },
-    inspect: function () {
-      return window.__FuriHook102 ? window.__FuriHook102.inspect() : "";
+    inspect: function (includeDiagnostics) {
+      return window.__FuriHook102 ? window.__FuriHook102.inspect(includeDiagnostics === true) : "";
     },
     dispose: function () {
       if (!window.__FuriHook102) return;

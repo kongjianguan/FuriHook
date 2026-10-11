@@ -31,14 +31,15 @@
       dynamicRevision: 0,
       copyEvents: 0,
       instanceId: Date.now().toString(36) + Math.random().toString(36).slice(2),
-      plainNode: document.getElementById('plain').firstChild
+      plainNode: document.getElementById('plain').firstChild,
+      dynamicNode: document.getElementById('dynamic').firstChild
     };
     document.addEventListener('copy', function () {
       window.fixtureState.copyEvents += 1;
     }, true);
     document.getElementById('dynamic-button').addEventListener('click', function () {
       window.fixtureState.dynamicRevision += 1;
-      document.getElementById('dynamic').textContent = '明日は図書館へ行きます。';
+      window.fixtureState.dynamicNode.data = '明日は図書館へ行きます。';
     });
     document.getElementById('link').addEventListener('click', function (event) {
       event.preventDefault();
