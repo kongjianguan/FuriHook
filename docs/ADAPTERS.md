@@ -20,6 +20,8 @@
 
 后台读音完成后，适配器核实节点的当前完整文本，再清除对应布局缓存并请求测量、绘制。intrinsic 测量先建立的纯文本缓存，在有界宽度测量后执行一次重建；文本版本变化会重新建立状态。注册前逐项检查实际类型和返回值，任何签名不匹配记录 `x_compose_unsupported`。
 
+根据 API 102 的内联处理要求，注册时对实际直接调用方 `modifiers.g.e(unit.m):text.e0` 和 `text.b0` 构造器执行 `deoptimize`，避免已编译调用方内联段落构造器而绕过 Hook。两条节点路径的 DEX 调用证据均由契约脚本检查，注册日志分别记录反优化返回值。
+
 静态检查输出明确区分 `staticContractVerified` 与 `runtimeHookVerified`。该安装包仅包含 arm64 原生库，现有 x86_64 专用模拟器尚未验证真实 X 页面中的注入、排版和交互。
 
 ## WebView

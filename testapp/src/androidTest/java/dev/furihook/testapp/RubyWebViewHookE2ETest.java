@@ -174,6 +174,9 @@ public final class RubyWebViewHookE2ETest {
             tap(scenario, "link");
             awaitJavascriptCondition(scenario,
                     "document.getElementById('link-result').textContent==='clicked'");
+            String linkClickResult = awaitJavascript(scenario,
+                    "document.getElementById('link-result').textContent");
+            assertEquals("clicked", linkClickResult);
             tap(scenario, "dynamic-button");
             awaitJavascriptCondition(scenario,
                     "window.fixtureState.dynamicRevision===1"
@@ -249,7 +252,7 @@ public final class RubyWebViewHookE2ETest {
             assertTrue("横向滚动前尾部必须位于宿主裁剪区域之外",
                     readerArea.getBoolean("tailInitiallyOutside"));
             assertTrue("修改宿主样式后必须保留原始 Text 节点", readerArea.getBoolean("sameNode"));
-            assertEquals(fullLongText, readerArea.getString("data"));
+            assertEquals(fullLongText, readerArea.getString("nodeData"));
             JSONObject readerAreaCheckpoint = new JSONObject().put("stage", "reader-area-before-scroll")
                     .put("analysis", naturalLong).put("naturalInspection", naturalInspection)
                     .put("naturalAnnotations", naturalAnnotations).put("naturalSkips", naturalSkips)
@@ -347,7 +350,7 @@ public final class RubyWebViewHookE2ETest {
             evidence.put("reactProductionVersion", translation.getString("reactProduction"));
             evidence.put("translationTextNodePreserved", translation.getBoolean("postNodeIdentityPreserved"));
             evidence.put("translationTextUpdatedBack", translatedAgain.getString("postNodeData"));
-            evidence.put("originalTextNodePreserved", reactOriginal.getBoolean("postNodeIdentityPreserved"));
+            evidence.put("reactOriginalTextNodePreserved", reactOriginal.getBoolean("postNodeIdentityPreserved"));
             evidence.put("reactOriginalSegments", annotationEvidence(reactAnnotations));
             evidence.put("reactListStableNode", afterList.getBoolean("schoolNodeIdentityPreserved"));
             evidence.put("reactListRemovedNodeDisconnected", afterList.getBoolean("removedRowDisconnected"));
@@ -356,9 +359,8 @@ public final class RubyWebViewHookE2ETest {
             evidence.put("reactInsertedSegments", annotationEvidence(annotationsForText(
                     afterListInspection, REACT_INSERTED_ROW)));
             evidence.put("rubyLayoutPixels", pixelEvidence);
-            evidence.put("originalTextNodePreserved", staticDom.getBoolean("plainNodeIdentityPreserved"));
-            evidence.put("linkClickPreserved", "clicked".equals(awaitJavascript(scenario,
-                    "document.getElementById('link-result').textContent")));
+            evidence.put("staticBodyTextNodePreserved", staticDom.getBoolean("plainNodeIdentityPreserved"));
+            evidence.put("linkClickPreserved", "clicked".equals(linkClickResult));
             evidence.put("clipboardText", copied.toString());
             evidence.put("longNodePrefixLength", longCreated.getInt("prefixLength"));
             evidence.put("longNodePreserved", longDom.getBoolean("connected"));
