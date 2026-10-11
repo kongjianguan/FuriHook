@@ -139,14 +139,64 @@ public final class RubyWebViewHookE2ETest {
             awaitJavascript(scenario,
                     "(function(){var style=document.createElement('style');style.id='host-css-update';"
                             + "style.textContent='#react-current.e2e-host-style{font-size:23px;"
-                            + "color:rgb(12,34,56);letter-spacing:1.25px}';document.head.appendChild(style);"
+                            + "color:rgb(12,34,56);letter-spacing:1.25px;line-height:58px;padding-top:18px}';document.head.appendChild(style);"
                             + "document.getElementById('react-current').classList.add('e2e-host-style');return true})()");
+            awaitJavascriptCondition(scenario,
+                    "(function(){var e=document.getElementById('react-current'),s=getComputedStyle(e),"
+                            + "a=JSON.parse(window.FuriHook102.inspect(true)).layoutReservations.filter(function(x){"
+                            + "return x.elementId==='react-current'}).pop();return s.lineHeight==='58px'&&a"
+                            + "&&a.status==='reserved'&&a.baseline.lineHeight==='58px'"
+                            + "&&a.baseline.paddingTop==='18px'})()");
             JSONObject hostCssJapaneseLayout = elementLayout(scenario, "react-current");
             assertEquals("23px", hostCssJapaneseLayout.getString("fontSize"));
             assertEquals("rgb(12, 34, 56)", hostCssJapaneseLayout.getString("color"));
             assertEquals("1.25px", hostCssJapaneseLayout.getString("letterSpacing"));
+            assertEquals("58px", hostCssJapaneseLayout.getString("lineHeight"));
             assertEquals(reactTranslationLayout.getDouble("width"),
                     hostCssJapaneseLayout.getDouble("width"), 0.01);
+            JSONObject classReservation = reservationFor(inspectDetailed(scenario), "react-current");
+            assertEquals("reserved", classReservation.getString("status"));
+            assertEquals("58px", classReservation.getJSONObject("computed").getString("lineHeight"));
+            assertTrue("Ruby 预留必须保留宿主 class 顶部间距",
+                    parseCssPixels(hostCssJapaneseLayout.getString("paddingTop")) >= 18);
+
+            setReactMode(scenario, "translation");
+            awaitJavascriptCondition(scenario,
+                    "window.reactFixture.inspect().mode==='translation'"
+                            + " && window.reactFixture.inspect().postNodeData==='" + REACT_TRANSLATION + "'");
+            JSONObject classRestoredLayout = elementLayout(scenario, "react-current");
+            JSONObject classRestoredReservation = reservationFor(
+                    inspectDetailed(scenario), "react-current");
+            assertEquals("58px", classRestoredLayout.getString("lineHeight"));
+            assertEquals("18px", classRestoredLayout.getString("paddingTop"));
+            assertEquals("restored", classRestoredReservation.getString("status"));
+
+            setReactMode(scenario, "original");
+            awaitJavascriptCondition(scenario,
+                    "window.reactFixture.inspect().mode==='original'"
+                            + " && window.reactFixture.inspect().postText==='" + REACT_ORIGINAL + "'"
+                            + " && " + hostHasAnnotationCondition(REACT_ORIGINAL, "今日"));
+            JSONObject classReappliedReservation = reservationFor(
+                    inspectDetailed(scenario), "react-current");
+            assertEquals("58px", classReappliedReservation.getJSONObject("baseline").getString("lineHeight"));
+            assertEquals("18px", classReappliedReservation.getJSONObject("baseline").getString("paddingTop"));
+
+            awaitJavascript(scenario,
+                    "(function(){var e=document.getElementById('react-current');"
+                            + "e.style.lineHeight='62px';e.style.paddingTop='24px';return true})()");
+            awaitJavascriptCondition(scenario,
+                    "(function(){var e=document.getElementById('react-current'),s=getComputedStyle(e),"
+                            + "a=JSON.parse(window.FuriHook102.inspect(true)).layoutReservations.filter(function(x){"
+                            + "return x.elementId==='react-current'}).pop();return s.lineHeight==='62px'"
+                            + "&&parseFloat(s.paddingTop)>=24&&a&&a.status==='reserved'"
+                            + "&&a.baseline.lineHeight==='62px'&&a.baseline.paddingTop==='24px'})()");
+            JSONObject hostInlineJapaneseLayout = elementLayout(scenario, "react-current");
+            JSONObject inlineReservation = reservationFor(inspectDetailed(scenario), "react-current");
+            assertEquals("62px", hostInlineJapaneseLayout.getString("lineHeight"));
+            assertTrue(parseCssPixels(hostInlineJapaneseLayout.getString("paddingTop")) >= 24);
+            assertEquals("62px", inlineReservation.getJSONObject("computed").getString("lineHeight"));
+            assertEquals("62px", inlineReservation.getJSONObject("baseline").getString("lineHeight"));
+            assertEquals("24px", inlineReservation.getJSONObject("baseline").getString("paddingTop"));
 
             setReactMode(scenario, "translation");
             awaitJavascriptCondition(scenario,
@@ -164,16 +214,34 @@ public final class RubyWebViewHookE2ETest {
             assertFalse("中文译文更新后不得留下日语注音", containsAnnotationForText(
                     inspect(scenario), REACT_TRANSLATION));
             JSONObject translatedLayout = elementLayout(scenario, "react-current");
-            assertEquals("译文提交后必须恢复宿主原有顶部间距",
-                    reactTranslationLayout.getString("paddingTop"), translatedLayout.getString("paddingTop"));
-            assertEquals("译文提交后必须恢复宿主原有行高",
-                    reactTranslationLayout.getString("lineHeight"), translatedLayout.getString("lineHeight"));
+            assertEquals("译文提交后必须保留宿主最新顶部间距", "24px",
+                    translatedLayout.getString("paddingTop"));
+            assertEquals("译文提交后必须保留宿主最新行高", "62px",
+                    translatedLayout.getString("lineHeight"));
             assertEquals("1.25px", translatedLayout.getString("letterSpacing"));
             assertEquals("23px", translatedLayout.getString("fontSize"));
             assertEquals("rgb(12, 34, 56)", translatedLayout.getString("color"));
             JSONObject restoredReservation = reservationFor(inspectDetailed(scenario), "react-current");
             assertTrue("inspect(true) 必须记录宿主样式恢复结果",
                     restoredReservation != null && "restored".equals(restoredReservation.getString("status")));
+
+            setReactMode(scenario, "original");
+            awaitJavascriptCondition(scenario,
+                    "window.reactFixture.inspect().mode==='original'"
+                            + " && window.reactFixture.inspect().postText==='" + REACT_ORIGINAL + "'"
+                            + " && " + hostHasAnnotationCondition(REACT_ORIGINAL, "今日"));
+            JSONObject reannotatedLayout = elementLayout(scenario, "react-current");
+            JSONObject reannotatedReservation = reservationFor(inspectDetailed(scenario), "react-current");
+            assertEquals("62px", reannotatedLayout.getString("lineHeight"));
+            assertTrue(parseCssPixels(reannotatedLayout.getString("paddingTop")) >= 24);
+            assertEquals("62px", reannotatedReservation.getJSONObject("baseline").getString("lineHeight"));
+            assertEquals("24px", reannotatedReservation.getJSONObject("baseline").getString("paddingTop"));
+            setReactMode(scenario, "translation");
+            awaitJavascriptCondition(scenario,
+                    "window.reactFixture.inspect().mode==='translation'"
+                            + " && window.reactFixture.inspect().postNodeData==='" + REACT_TRANSLATION + "'"
+                            + " && getComputedStyle(document.getElementById('react-current')).lineHeight==='62px'"
+                            + " && getComputedStyle(document.getElementById('react-current')).paddingTop==='24px'");
 
             String protectedText = "日本語学校。";
             awaitJavascript(scenario,

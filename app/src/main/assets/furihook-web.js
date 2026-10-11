@@ -142,12 +142,19 @@
               state.ownStyleWrites.delete(mutation.target);
             }
             if (mutation.type === "characterData") {
+              if (mutation.target.parentElement && mutation.target.parentElement.localName === "style") {
+                releaseLayoutReservations(null, "stylesheet-change");
+              }
               invalidateNode(mutation.target);
               queueDirtyNode(mutation.target);
               languageChanged = true;
               layoutChanged = true;
             } else if (mutation.type === "childList") {
               if (mutation.target.nodeType === 1 && mutation.target.closest(OWNED)) continue;
+              if (isStylesheetNode(mutation.target)
+                  || [...mutation.addedNodes, ...mutation.removedNodes].some(containsStylesheetNode)) {
+                releaseLayoutReservations(null, "stylesheet-change");
+              }
               for (const removed of mutation.removedNodes) removeDisconnected(removed);
               for (const added of mutation.addedNodes) {
                 if (added.nodeType === 1 && added.matches(OWNED)) continue;
@@ -158,6 +165,15 @@
               layoutChanged = true;
             } else if (mutation.type === "attributes") {
               if (mutation.target.nodeType === 1 && mutation.target.closest(OWNED)) continue;
+              if (mutation.attributeName === "class" || mutation.attributeName === "style") {
+                releaseLayoutReservations(mutation.target, "host-style-change");
+              } else if ((mutation.attributeName === "href" || mutation.attributeName === "rel"
+                  || mutation.attributeName === "media" || mutation.attributeName === "disabled"
+                  || mutation.attributeName === "type") && (isStylesheetNode(mutation.target)
+                    || (mutation.target.localName === "link" && mutation.attributeName === "rel"
+                      && /(?:^|\s)stylesheet(?:\s|$)/i.test(mutation.oldValue || "")))) {
+                releaseLayoutReservations(null, "stylesheet-change");
+              }
               if (mutation.attributeName === "lang" || mutation.attributeName === "xml:lang") {
                 languageChanged = true;
                 invalidateTrackedSubtree(mutation.target);
@@ -179,7 +195,8 @@
           }
         });
         state.observer.observe(root, {subtree: true, childList: true, characterData: true,
-          attributes: true, attributeFilter: ["class", "style", "hidden", "lang", "xml:lang", "dir", "contenteditable"]});
+          attributes: true, attributeFilter: ["class", "style", "hidden", "lang", "xml:lang", "dir", "contenteditable",
+            "href", "rel", "media", "disabled", "type"], attributeOldValue: true});
       }
       if (!state.resizeObserver && typeof ResizeObserver === "function") {
         state.resizeObserver = new ResizeObserver(scheduleLayout);
@@ -708,6 +725,29 @@
       }
     }
 
+    function isStylesheetNode(node) {
+      return node && node.nodeType === 1
+        && (node.localName === "style" || (node.localName === "link" && /(?:^|\s)stylesheet(?:\s|$)/i.test(node.rel)));
+    }
+
+    function containsStylesheetNode(node) {
+      if (!node || node.nodeType !== 1) return false;
+      if (isStylesheetNode(node)) return true;
+      return Boolean(node.querySelector && node.querySelector("style,link[rel~='stylesheet']"));
+    }
+
+    function releaseLayoutReservations(target, reason) {
+      for (const [element, reservation] of state.layoutReservations) {
+        if (target && element !== target && !target.contains(element)) continue;
+        restoreReservation(element, reservation);
+        state.layoutReservations.delete(element);
+        noteReservation({element: element, status: "restored", reason: reason,
+          baseline: reservation.baseline,
+          applied: {lineHeight: reservation.applied["line-height"].value,
+            paddingTop: reservation.applied["padding-top"].value}, required: reservation.required});
+      }
+    }
+
     function prepareLayoutReservations(layer, viewport) {
       const needed = new Map();
       let measured = 0;
@@ -977,6 +1017,11 @@
     }
 
     state.scheduleLayout = scheduleLayout;
+    state.stylesheetLoaded = function (event) {
+      if (!isStylesheetNode(event.target)) return;
+      releaseLayoutReservations(null, "stylesheet-change");
+      scheduleLayout();
+    };
     function updateAnimationFrame() {
       if (state.animationPending) return;
       for (const record of state.records.values()) {
@@ -1160,6 +1205,7 @@
       window.removeEventListener("pageshow", pageShown);
       document.removeEventListener("transitionrun", state.scheduleLayout, true);
       document.removeEventListener("animationstart", state.scheduleLayout, true);
+      document.removeEventListener("load", state.stylesheetLoaded, true);
       if (document.fonts) document.fonts.removeEventListener("loadingdone", state.scheduleLayout);
       for (const [element, reservation] of state.layoutReservations) restoreReservation(element, reservation);
       state.layoutReservations.clear();
@@ -1223,6 +1269,7 @@
       window.addEventListener("pageshow", pageShown);
       document.addEventListener("transitionrun", state.scheduleLayout, true);
       document.addEventListener("animationstart", state.scheduleLayout, true);
+      document.addEventListener("load", state.stylesheetLoaded, true);
       if (document.fonts) {
         document.fonts.ready.then(state.scheduleLayout);
         document.fonts.addEventListener("loadingdone", state.scheduleLayout);

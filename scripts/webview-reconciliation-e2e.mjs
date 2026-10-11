@@ -216,16 +216,77 @@ try {
   await page.evaluate(() => {
     const style = document.createElement('style');
     style.id = 'host-css-update';
-    style.textContent = '#react-current.e2e-host-style { font-size: 23px; color: rgb(12, 34, 56); letter-spacing: 1.25px; }';
+    style.textContent = '#react-current.e2e-host-style { font-size: 23px; color: rgb(12, 34, 56); letter-spacing: 1.25px; line-height: 58px; padding-top: 18px; }';
     document.head.appendChild(style);
     document.getElementById('react-current').classList.add('e2e-host-style');
   });
   await settle();
+  await waitFor(() => {
+    const reservation = JSON.parse(window.FuriHook102.inspect(true)).layoutReservations
+      .findLast(item => item.elementId === 'react-current');
+    return getComputedStyle(document.getElementById('react-current')).lineHeight === '58px'
+      && reservation?.status === 'reserved' && reservation.baseline?.lineHeight === '58px'
+      && reservation.baseline?.paddingTop === '18px';
+  }, 'Host class layout changes must be measured before Ruby reservation is reapplied');
   const hostCssJapaneseLayout = await layoutSnapshot('#react-current');
   assert.equal(hostCssJapaneseLayout.fontSize, '23px');
   assert.equal(hostCssJapaneseLayout.color, 'rgb(12, 34, 56)');
   assert.equal(hostCssJapaneseLayout.letterSpacing, '1.25px');
   assert.equal(hostCssJapaneseLayout.width, reactTranslationLayout.width);
+  assert.equal(hostCssJapaneseLayout.lineHeight, '58px',
+    'A host class line-height update must replace the previous module inline value');
+  const classReservation = reservationFor(await inspectDetailed(), 'react-current');
+  assert.equal(classReservation.status, 'reserved', JSON.stringify(classReservation));
+  assert.equal(classReservation.baseline.lineHeight, '58px', JSON.stringify(classReservation));
+  assert.equal(classReservation.baseline.paddingTop, '18px', JSON.stringify(classReservation));
+  assert.equal(classReservation.computed.lineHeight, '58px', JSON.stringify(classReservation));
+  assert.ok(Number.parseFloat(hostCssJapaneseLayout.paddingTop) >= 18,
+    `Ruby space must preserve the host class padding baseline: ${JSON.stringify(classReservation)}`);
+
+  await page.evaluate(() => window.reactFixture.setMode('translation'));
+  await waitFor(() => window.reactFixture.inspect().mode === 'translation'
+    && window.reactFixture.inspect().postText === '今天去学校学习日语。',
+  'Host class styles must survive the first Chinese translation');
+  await settle();
+  const classRestoredLayout = await layoutSnapshot('#react-current');
+  const classRestoredReservation = reservationFor(await inspectDetailed(), 'react-current');
+  assert.equal(classRestoredLayout.lineHeight, '58px');
+  assert.equal(classRestoredLayout.paddingTop, '18px');
+  assert.equal(classRestoredReservation.status, 'restored', JSON.stringify(classRestoredReservation));
+
+  await page.evaluate(() => window.reactFixture.setMode('original'));
+  await waitFor(() => window.reactFixture.inspect().mode === 'original'
+    && window.reactFixture.inspect().postText === '今日は学校へ行きます。'
+    && (() => {
+      const inspection = JSON.parse(window.FuriHook102.inspect());
+      const node = inspection.hostNodes.find(item => item.connected && item.data === '今日は学校へ行きます。');
+      return Boolean(node && inspection.annotations.some(item => item.nodeId === node.nodeId));
+    })(),
+  'Host class styles must be measured again when Japanese Ruby returns');
+  const classReappliedReservation = reservationFor(await inspectDetailed(), 'react-current');
+  assert.equal(classReappliedReservation.baseline.lineHeight, '58px', JSON.stringify(classReappliedReservation));
+  assert.equal(classReappliedReservation.baseline.paddingTop, '18px', JSON.stringify(classReappliedReservation));
+
+  await page.locator('#react-current').evaluate(element => {
+    element.style.lineHeight = '62px';
+    element.style.paddingTop = '24px';
+  });
+  await waitFor(() => {
+    const element = document.getElementById('react-current');
+    const style = getComputedStyle(element);
+    const reservation = JSON.parse(window.FuriHook102.inspect(true)).layoutReservations
+      .findLast(item => item.elementId === 'react-current');
+    return style.lineHeight === '62px' && Number.parseFloat(style.paddingTop) >= 24
+      && reservation?.status === 'reserved' && reservation.baseline?.lineHeight === '62px'
+      && reservation.baseline?.paddingTop === '24px';
+  }, 'Host inline line-height and padding changes must become the new reservation baseline');
+  const hostInlineJapaneseLayout = await layoutSnapshot('#react-current');
+  const inlineReservation = reservationFor(await inspectDetailed(), 'react-current');
+  assert.equal(hostInlineJapaneseLayout.lineHeight, '62px');
+  assert.ok(Number.parseFloat(hostInlineJapaneseLayout.paddingTop) >= 24);
+  assert.equal(inlineReservation.computed.lineHeight, '62px', JSON.stringify(inlineReservation));
+  assert.equal(inlineReservation.baseline.lineHeight, '62px', JSON.stringify(inlineReservation));
+  assert.equal(inlineReservation.baseline.paddingTop, '24px', JSON.stringify(inlineReservation));
 
   await page.evaluate(() => window.reactFixture.setMode('translation'));
   await waitFor(() => window.reactFixture.inspect().mode === 'translation'
@@ -238,10 +299,10 @@ try {
   assert.equal(translatedAgain.postNodeData, reactTranslation);
   assert.equal(annotationsFor(await inspect(), reactTranslation).length, 0);
   const translatedLayout = await layoutSnapshot('#react-current');
-  assert.equal(translatedLayout.paddingTop, reactTranslationLayout.paddingTop,
-    'Returning to Chinese must restore the host padding');
-  assert.equal(translatedLayout.lineHeight, reactTranslationLayout.lineHeight,
-    'Returning to Chinese must restore the host line height');
+  assert.equal(translatedLayout.paddingTop, '24px',
+    'Returning to Chinese must restore the host inline padding update');
+  assert.equal(translatedLayout.lineHeight, '62px',
+    'Returning to Chinese must restore the host inline line-height update');
   assert.equal(translatedLayout.width, reactTranslationLayout.width);
   assert.equal(translatedLayout.letterSpacing, '1.25px',
     'Restoration must preserve the host CSS update');
@@ -250,6 +311,28 @@ try {
   const restoredReservation = reservationFor(await inspectDetailed(), 'react-current');
   assert.ok(restoredReservation, 'inspect(true) must retain the restoration result');
   assert.equal(restoredReservation.status, 'restored', JSON.stringify(restoredReservation));
+
+  await page.evaluate(() => window.reactFixture.setMode('original'));
+  await waitFor(() => window.reactFixture.inspect().mode === 'original'
+    && window.reactFixture.inspect().postText === '今日は学校へ行きます。'
+    && (() => {
+      const inspection = JSON.parse(window.FuriHook102.inspect());
+      const node = inspection.hostNodes.find(item => item.connected && item.data === '今日は学校へ行きます。');
+      return Boolean(node && inspection.annotations.some(item => item.nodeId === node.nodeId));
+    })(),
+  'React must reapply Japanese Ruby after host inline layout changes');
+  const reannotatedLayout = await layoutSnapshot('#react-current');
+  const reannotatedReservation = reservationFor(await inspectDetailed(), 'react-current');
+  assert.equal(reannotatedLayout.lineHeight, '62px');
+  assert.ok(Number.parseFloat(reannotatedLayout.paddingTop) >= 24);
+  assert.equal(reannotatedReservation.baseline.lineHeight, '62px', JSON.stringify(reannotatedReservation));
+  assert.equal(reannotatedReservation.baseline.paddingTop, '24px', JSON.stringify(reannotatedReservation));
+  await page.evaluate(() => window.reactFixture.setMode('translation'));
+  await waitFor(() => window.reactFixture.inspect().mode === 'translation'
+    && window.reactFixture.inspect().postText === '今天去学校学习日语。'
+    && getComputedStyle(document.getElementById('react-current')).lineHeight === '62px'
+    && getComputedStyle(document.getElementById('react-current')).paddingTop === '24px',
+  'Removing Ruby after reannotation must retain the latest host inline values');
 
   const protectedText = '日本語学校。';
   await page.evaluate(text => {

@@ -75,16 +75,45 @@ function Wait-PageReport {
     throw "Via 页面验证超时：$Name"
 }
 
+function Read-NodeBounds {
+    param([System.Xml.XmlElement]$Node)
+    $match = [regex]::Match($Node.GetAttribute('bounds'), '^\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]$')
+    if (-not $match.Success) { throw 'UIAutomator 节点范围无效' }
+    return @{ Left = [int]$match.Groups[1].Value; Top = [int]$match.Groups[2].Value;
+        Right = [int]$match.Groups[3].Value; Bottom = [int]$match.Groups[4].Value }
+}
+
 function Tap-VisibleText {
     param([string]$Text)
-    $document = Save-PageDump 'tap-current'
-    $node = $document.SelectSingleNode("//node[@text='$Text' or @content-desc='$Text']")
-    if (-not $node) { throw "UIAutomator 没有找到可触摸文本：$Text" }
-    $bounds = [regex]::Match($node.GetAttribute('bounds'), '^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$')
-    if (-not $bounds.Success) { throw "UIAutomator 文本范围无效：$Text" }
-    $x = [int](([int]$bounds.Groups[1].Value + [int]$bounds.Groups[3].Value) / 2)
-    $y = [int](([int]$bounds.Groups[2].Value + [int]$bounds.Groups[4].Value) / 2)
-    Invoke-Device @('shell', 'input', 'tap', "$x", "$y") | Out-Null
+    for ($attempt = 0; $attempt -lt 12; $attempt++) {
+        $document = Save-PageDump 'tap-current'
+        $webNode = $document.SelectSingleNode("//node[@package='mark.via.gp' and @class='android.webkit.WebView']")
+        if (-not $webNode) { throw 'UIAutomator 没有找到 Via WebView 视口' }
+        $viewport = Read-NodeBounds $webNode
+        $node = $document.SelectSingleNode("//node[@text='$Text' or @content-desc='$Text']")
+        $bounds = if ($node) { Read-NodeBounds $node } else { $null }
+        if ($bounds) {
+            $left = [Math]::Max($bounds.Left, $viewport.Left)
+            $right = [Math]::Min($bounds.Right, $viewport.Right)
+            $top = [Math]::Max($bounds.Top, $viewport.Top)
+            $bottom = [Math]::Min($bounds.Bottom, $viewport.Bottom)
+            if ($right - $left -ge 8 -and $bottom - $top -ge 8) {
+                $x = [int](($left + $right) / 2)
+                $y = [int](($top + $bottom) / 2)
+                Invoke-Device @('shell', 'input', 'tap', "$x", "$y") | Out-Null
+                return
+            }
+        }
+        $x = [int](($viewport.Left + $viewport.Right) / 2)
+        $upper = $viewport.Top + 60
+        $lower = $viewport.Bottom - 60
+        $scrollUp = ($bounds -and $bounds.Bottom -le $viewport.Top -and $bounds.Bottom -gt $bounds.Top) -or $attempt -ge 6
+        $from = if ($scrollUp) { $upper } else { $lower }
+        $to = if ($scrollUp) { $lower } else { $upper }
+        Invoke-Device @('shell', 'input', 'swipe', "$x", "$from", "$x", "$to", '350') | Out-Null
+        Start-Sleep -Milliseconds 350
+    }
+    throw "UIAutomator 未能滚动到可触摸文本：$Text"
 }
 
 try {
