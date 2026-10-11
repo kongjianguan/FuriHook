@@ -72,8 +72,9 @@ public final class RubyWebViewHookE2ETest {
             awaitPageLoaded(scenario);
             awaitJavascriptCondition(scenario,
                     "window.fixtureState && window.reactFixture && window.FuriHook102"
-                            + " && JSON.parse(window.FuriHook102.inspect()).scan.initialDone"
-                            + " && " + hostHasAnnotationCondition(ORIGINAL, "今日"));
+                            + " && JSON.parse(window.FuriHook102.inspect()).scan.initialDone");
+            scrollIntoView(scenario, "plain");
+            awaitJavascriptCondition(scenario, hostHasAnnotationCondition(ORIGINAL, "今日"));
 
             JSONObject initial = inspect(scenario);
             JSONObject reactTranslationLayout = elementLayout(scenario, "react-current");

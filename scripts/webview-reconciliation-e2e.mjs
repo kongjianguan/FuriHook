@@ -660,6 +660,48 @@ try {
   assert.equal(insufficientReservation.status, 'unmanaged', JSON.stringify(insufficientReservation));
   assert.equal(insufficientReservation.reason, 'ancestor-clip', JSON.stringify(insufficientReservation));
 
+  const fractionalText = '今日は学校。';
+  await page.evaluate(text => {
+    const paragraph = document.createElement('p');
+    paragraph.id = 'fractional-scale-ruby';
+    paragraph.style.cssText = 'margin:12px 0;font-size:21px;line-height:normal;transform:scale(1.137);transform-origin:top left;';
+    paragraph.appendChild(document.createTextNode(text));
+    document.body.appendChild(paragraph);
+  }, fractionalText);
+  await page.locator('#fractional-scale-ruby').scrollIntoViewIfNeeded();
+  await settle();
+  async function fractionalLayoutSnapshot() {
+    return page.locator('#fractional-scale-ruby').evaluate(element => {
+      const range = document.createRange();
+      range.selectNodeContents(element.firstChild);
+      const rangeHeight = range.getBoundingClientRect().height;
+      const inspection = JSON.parse(window.FuriHook102.inspect(true));
+      const reservation = inspection.layoutReservations.findLast(item => item.elementId === element.id);
+      const host = reservation && inspection.hostNodes.find(item => item.connected
+        && item.data === element.firstChild.data && item.parentElementId === reservation.nodeId);
+      const annotations = host
+        ? inspection.annotations.filter(item => item.nodeId === host.nodeId) : [];
+      return {rangeHeight, transform: getComputedStyle(element).transform,
+        layoutPasses: inspection.layoutPasses, annotationCount: annotations.length,
+        readings: annotations.map(item => ({baseText: item.baseText, reading: item.reading})),
+        reservation};
+    });
+  }
+  const fractionalInitial = await fractionalLayoutSnapshot();
+  assert.notEqual(fractionalInitial.transform, 'none');
+  assert.ok(Math.abs(fractionalInitial.rangeHeight - Math.round(fractionalInitial.rangeHeight)) > 0.01,
+    `The real DOM Range must have fractional CSS-pixel height: ${JSON.stringify(fractionalInitial)}`);
+  assert.ok(fractionalInitial.annotationCount > 0,
+    `Fractionally scaled Japanese text must retain real Ruby labels: ${JSON.stringify(fractionalInitial)}`);
+  assert.equal(fractionalInitial.reservation.status, 'reserved', JSON.stringify(fractionalInitial.reservation));
+  await page.waitForTimeout(800);
+  const fractionalStable = await fractionalLayoutSnapshot();
+  assert.equal(fractionalStable.layoutPasses, fractionalInitial.layoutPasses,
+    `Fractional layout must stop accumulating passes: ${JSON.stringify({fractionalInitial, fractionalStable})}`);
+  assert.equal(fractionalStable.annotationCount, fractionalInitial.annotationCount,
+    `Fractional layout must retain its Ruby labels: ${JSON.stringify({fractionalInitial, fractionalStable})}`);
+  assert.deepEqual(fractionalStable.readings, fractionalInitial.readings);
+
   const burstStart = (await inspect()).analyzedSegmentCount;
   await page.evaluate(() => {
     const root = document.createElement('div');
@@ -734,6 +776,7 @@ try {
     protectedTextAnnotations: annotationsFor(protectedInspection, protectedText),
     fixedReservation,
     insufficientReservation,
+    fractionalStability: {initial: fractionalInitial, after800ms: fractionalStable},
     reactOriginalAnnotations: originalAnnotations,
     retainedListAnnotations: retainedAnnotations,
     insertedListAnnotations: insertedAnnotations,

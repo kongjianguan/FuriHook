@@ -709,6 +709,12 @@
         && element.style.getPropertyPriority(property) === declaration.priority;
     }
 
+    function sameCssPixels(actual, requested) {
+      if (actual === requested) return true;
+      if (!/^-?(?:\d+|\d*\.\d+)px$/.test(actual) || !/^-?(?:\d+|\d*\.\d+)px$/.test(requested)) return false;
+      return Math.abs(Number.parseFloat(actual) - Number.parseFloat(requested)) <= 0.01;
+    }
+
     function writeReservationStyle(element, reservation, property, value) {
       element.style.setProperty(property, value);
       reservation.applied[property] = inlineDeclaration(element, property);
@@ -823,6 +829,7 @@
           reservation = null;
           noteReservation({element: element, status: "excluded", reason: "host-style-change"});
         }
+        const firstReservation = !reservation;
         if (!reservation && state.layoutReservations.size >= MAX_LAYOUT_RESERVATIONS) {
           noteReservation({element: element, status: "excluded", reason: "reservation-limit"});
           continue;
@@ -852,13 +859,13 @@
         let changedElement = false;
         reservation.required = {rangeHeight: metrics.rangeHeight, labelHeight: metrics.labelHeight,
           gap: metrics.gap, lineHeight: lineValue, paddingTop: paddingValue};
-        if (element.style.getPropertyValue("line-height") !== lineValue) {
+        if (!sameCssPixels(element.style.getPropertyValue("line-height"), lineValue)) {
           writeReservationStyle(element, reservation, "line-height", lineValue);
           changedElement = true;
         } else if (!reservation.applied["line-height"]) {
           reservation.applied["line-height"] = inlineDeclaration(element, "line-height");
         }
-        if (element.style.getPropertyValue("padding-top") !== paddingValue) {
+        if (!sameCssPixels(element.style.getPropertyValue("padding-top"), paddingValue)) {
           writeReservationStyle(element, reservation, "padding-top", paddingValue);
           changedElement = true;
         } else if (!reservation.applied["padding-top"]) {
@@ -867,7 +874,7 @@
         if (changedElement) {
           const actualGrowth = element.getBoundingClientRect().height - beforeHeight;
           const expectedGrowth = extra * transformScale(element).y;
-          if (actualGrowth + 0.5 < expectedGrowth) {
+          if (firstReservation && actualGrowth + 0.5 < expectedGrowth) {
             restoreReservation(element, reservation);
             state.layoutReservations.delete(element);
             noteReservation({element: element, status: "excluded", reason: "fixed-size"});
