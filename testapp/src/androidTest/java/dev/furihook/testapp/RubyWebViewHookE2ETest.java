@@ -81,6 +81,8 @@ public final class RubyWebViewHookE2ETest {
             awaitJavascript(scenario,
                     "(function(){window.__e2eEditableNode=document.getElementById('editable').firstChild;return true})()");
             JSONObject initialPage = pageSnapshot(scenario);
+            assertTrue("日语正文必须包含生产引擎生成的读音记录",
+                    hostTextHasRuby(scenario, "plain"));
             assertEquals("宿主初始 contenteditable 文本应保持fixture实际值",
                     "今日は学校。", initialPage.getString("editableText"));
             assertFalse("contenteditable 初始文本不得接受注音",
@@ -566,10 +568,12 @@ public final class RubyWebViewHookE2ETest {
 
     private static boolean hostTextHasRuby(ActivityScenario<WebViewRubyFixtureActivity> scenario,
                                            String elementId) throws Exception {
-        return Boolean.parseBoolean(awaitJavascript(scenario,
+        String value = awaitJavascript(scenario,
                 "(function(){var n=document.getElementById('" + elementId + "').firstChild;"
-                        + "return Array.from(window.FuriHook102.records.values()).some(function(record){"
-                        + "return record.node===n&&Array.isArray(record.segments)&&record.segments.length>0})})()"));
+                        + "return Array.from(window.__FuriHook102.records.values()).some(function(record){"
+                        + "return record.node===n&&Array.isArray(record.segments)&&record.segments.length>0})})()");
+        assertTrue("读音记录检查必须返回明确的布尔值", "true".equals(value) || "false".equals(value));
+        return Boolean.parseBoolean(value);
     }
 
     private static JSONObject reservationFor(JSONObject inspection, String elementId)
