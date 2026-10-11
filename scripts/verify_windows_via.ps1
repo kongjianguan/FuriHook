@@ -277,11 +277,15 @@ try {
     Scroll-TextIntoReadingViewport '明日は図書館へ行きます。' 'later' $rubyTopMarginPx | Out-Null
     $updatedVisible = Wait-PageReport 'updated-ruby-visible' {
         param($report) $report.updateRequested -and $report.updatedRubyMatch
+            -and $report.visibleUpdatedAnnotationCount -gt 0
     }
     foreach ($pair in @('明日:あした', '図書館:としょかん', '行:い')) {
         if ($pair -notin $updatedVisible.Report.updatedRubies) { throw "更新文可视复验缺少范围：$pair" }
     }
-    if (-not $updatedVisible.Report.layoutIsClear) { throw '更新文滚动后的可见注音几何检查失败' }
+    if (-not $updatedVisible.Report.updatedLayoutIsClear -or
+        $updatedVisible.Report.visibleUpdatedAnnotationCount -eq 0) {
+        throw '更新文滚动后的可见注音几何检查失败'
+    }
 
     Save-PageDump 'final' | Out-Null
     $logs = Invoke-Device @('logcat', '-d', '-v', 'raw', '-s', 'FuriHook:I')
@@ -296,7 +300,8 @@ try {
     if ($applied.Count -eq 0) { throw 'Via WebView 没有记录实际 Ruby 注音应用事件' }
     if (@($events | Where-Object event -Match 'failed').Count -ne 0) { throw 'Via Hook 日志报告错误' }
     if (-not $linked.Report.updatedRubyMatch -or -not $originalVisible.Report.layoutIsClear -or
-        -not $updatedVisible.Report.layoutIsClear -or
+        -not $updatedVisible.Report.updatedLayoutIsClear -or
+        $updatedVisible.Report.visibleUpdatedAnnotationCount -eq 0 -or
         -not $reactOriginal.Report.reactOriginalUpdated -or
         -not $reactTranslation.Report.reactTranslationOnly -or
         -not $reactList.Report.reactListUpdated -or
@@ -314,13 +319,11 @@ try {
         targetPackage = 'mark.via.gp'
         targetVersion = '7.3.3'
         url = $url
-        originalRubyPairs = $linked.Report.originalRubies
-        updatedRubyPairs = $linked.Report.updatedRubies
-        visibleOriginalRubyPairs = $originalVisible.Report.originalRubies
-        visibleUpdatedRubyPairs = $updatedVisible.Report.updatedRubies
+        originalRubyPairs = $originalVisible.Report.originalRubies
+        updatedRubyPairs = $updatedVisible.Report.updatedRubies
         linkedOriginalRecord = $linked.Report.plainModuleCoverage
         visibleOriginalAnnotations = $originalVisible.Report.visibleOriginalAnnotationCount
-        visibleUpdatedAnnotations = $updatedVisible.Report.updatedRubies.Count
+        visibleUpdatedAnnotations = $updatedVisible.Report.visibleUpdatedAnnotationCount
         rubyTopMarginPx = $rubyTopMarginPx
         linkedOriginalAnnotationCount = $linked.Report.plainModuleCoverage.annotationCount
         linkedEvidencePath = Join-Path $outputDirectory 'via-linked-page-report.json'
@@ -336,7 +339,7 @@ try {
         reactListRemovedNodeDisconnected = $reactList.Report.react.removedRowDisconnected
         reactListRubyPairs = @($reactList.Report.reactListAnnotationPairs)
         reactProduction = $reactList.Report.react.reactProduction
-        rubyLayoutClear = $originalVisible.Report.layoutIsClear -and $updatedVisible.Report.layoutIsClear
+        rubyLayoutClear = $originalVisible.Report.layoutIsClear -and $updatedVisible.Report.updatedLayoutIsClear
         linkClickCount = $linked.Report.linkClickCount
         inputAndEditableExcluded = $linked.Report.inputAndEditableExcluded
         existingRubyPreserved = $linked.Report.existingRubyPreserved

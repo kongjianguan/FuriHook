@@ -12,7 +12,7 @@
   const MAX_PENDING_BATCHES = 7;
   const MAX_TRACKED_RECORDS = 4096;
   const MAX_VISIBLE_ANNOTATIONS = 128;
-  const MAX_LAYOUT_RESERVATIONS = 128;
+  const MAX_LAYOUT_RESERVATIONS = MAX_TRACKED_RECORDS;
   const MAX_OCCUPANCY_NODES = 2048;
   const KANJI = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u{20000}-\u{2fa1d}]/u;
   const KANA = /[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9d]/u;
@@ -757,12 +757,20 @@
 
     function prepareLayoutReservations(layer, viewport) {
       const needed = new Map();
+      const readableParents = new Set();
+      for (const record of state.records.values()) {
+        if (record.segments && record.segments.length && record.node.isConnected
+            && record.node.data.slice(record.offset, record.offset + record.text.length) === record.text
+            && !blocked(record.node) && record.parent.isConnected) readableParents.add(record.parent);
+      }
       let measured = 0;
       for (const record of state.records.values()) {
         if (measured >= MAX_VISIBLE_ANNOTATIONS) break;
         if (!record.segments || !record.segments.length || !record.node.isConnected
             || record.node.data.slice(record.offset, record.offset + record.text.length) !== record.text
-            || blocked(record.node) || !elementVisible(record.node.parentElement)) continue;
+            || blocked(record.node)) continue;
+        const parentVisible = elementVisible(record.node.parentElement);
+        if (!parentVisible) continue;
         const hostBox = record.node.parentElement.getBoundingClientRect();
         if (hostBox.right < viewport.left - VIEWPORT_MARGIN || hostBox.left > viewport.right + VIEWPORT_MARGIN
             || hostBox.bottom < viewport.top - VIEWPORT_MARGIN || hostBox.top > viewport.bottom + VIEWPORT_MARGIN) continue;
@@ -812,6 +820,8 @@
 
       for (const [element, reservation] of state.layoutReservations) {
         if (needed.has(element)) continue;
+        if (readableParents.has(element) && element.isConnected && elementVisible(element)
+            && !reservationBlockReason(element)) continue;
         restoreReservation(element, reservation);
         state.layoutReservations.delete(element);
         noteReservation({element: element, status: "restored", reason: "no-readings",

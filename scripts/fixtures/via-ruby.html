@@ -386,6 +386,8 @@
           existingRubyOwned: existing?.hasAttribute("data-furihook-owned") || false,
           layoutIsClear: layoutIsClear(originalAnnotations),
           visibleOriginalAnnotationCount: originalAnnotations.filter((item) => item.visible).length,
+          updatedLayoutIsClear: layoutIsClear(updatedAnnotations),
+          visibleUpdatedAnnotationCount: updatedAnnotations.filter((item) => item.visible).length,
           reactTranslationOnly: Boolean(react && react.mode === "translation"
             && react.postText === "今天去学校学习日语。" && react.postChildCount === 1
             && react.postNodeIdentityPreserved && react.postNodeParentPreserved

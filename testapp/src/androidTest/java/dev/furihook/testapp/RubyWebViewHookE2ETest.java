@@ -412,6 +412,7 @@ public final class RubyWebViewHookE2ETest {
                     .put("naturalAnnotations", naturalAnnotations).put("naturalSkips", naturalSkips)
                     .put("readerArea", readerArea);
             saveEvidence(scenario, readerAreaCheckpoint);
+            scrollIntoView(scenario, "long-single-node");
             JSONObject scrollResult = new JSONObject(awaitJavascript(scenario, longNodeScrollTailExpression()));
             JSONObject afterScrollBeforeLayout = new JSONObject(awaitJavascript(scenario,
                     longNodeSnapshotExpression("visible")));

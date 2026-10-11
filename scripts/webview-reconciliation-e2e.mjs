@@ -10,6 +10,7 @@ const packageRequire = createRequire(path.join(repository, 'scripts/webview-e2e/
 const { PNG: PngDecoder } = packageRequire('pngjs');
 const { chromium: chromiumLauncher } = packageRequire('playwright');
 const fixture = path.join(repository, 'testapp/src/main/assets/webview_ruby_fixture.html');
+const viaFixture = path.join(repository, 'scripts/fixtures/via-ruby.html');
 const renderer = path.join(repository, 'app/src/main/assets/furihook-web.js');
 const classpathFile = path.join(repository, 'core/build/reports/webview-e2e/bridge-classpath.txt');
 const outputDirectory = path.join(repository, 'work/webview-reconciliation-e2e');
@@ -54,18 +55,23 @@ async function analyzeTexts(texts) {
 }
 
 const productionScript = await readFile(renderer, 'utf8');
+const rendererPumpSource = `${productionScript}\nwindow.FuriHook102.install(Date.now());\n(async function pump(){if(!window.FuriHook102){setTimeout(pump,20);return;}try{for(let i=0;i<8;i++){const raw=window.FuriHook102.pull(JSON.parse(window.FuriHook102.inspect()).generation);if(!raw)break;const batch=JSON.parse(raw);if(!batch.items.length)break;const analyzed=await window.__furiBridgeAnalyze(batch.items.map(item=>item.text));const byText=new Map(analyzed.results.map(item=>[item.text,item.segments.map(segment=>[segment.startUtf16,segment.endUtf16,segment.reading])]));window.FuriHook102.apply(JSON.stringify({generation:batch.generation,items:batch.items.map(item=>({...item,segments:byText.get(item.text)||[]}))}));}}catch(error){window.__furiPumpError=String(error&&error.stack||error);}setTimeout(pump,12);})();`;
+async function installRenderer(targetPage) {
+  await targetPage.exposeFunction('__furiBridgeAnalyze', analyzeTexts);
+  await targetPage.addInitScript({ content: rendererPumpSource });
+}
 const browserOptions = { headless: true, viewport: { width: 1280, height: 960 }, deviceScaleFactor: 1 };
 const browserExecutable = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || process.env.CHROME_PATH;
 if (browserExecutable) browserOptions.executablePath = browserExecutable;
 const context = await chromiumLauncher.launchPersistentContext(
   path.join(outputDirectory, 'chrome-profile'), browserOptions);
 const browserVersion = context.browser().version();
+let narrowContext;
 try {
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
-  await page.addInitScript({ content: `${productionScript}\nwindow.FuriHook102.install(Date.now());\n(async function pump(){if(!window.FuriHook102){setTimeout(pump,20);return;}try{for(let i=0;i<8;i++){const raw=window.FuriHook102.pull(JSON.parse(window.FuriHook102.inspect()).generation);if(!raw)break;const batch=JSON.parse(raw);if(!batch.items.length)break;const analyzed=await window.__furiBridgeAnalyze(batch.items.map(item=>item.text));const byText=new Map(analyzed.results.map(item=>[item.text,item.segments.map(segment=>[segment.startUtf16,segment.endUtf16,segment.reading])]));window.FuriHook102.apply(JSON.stringify({generation:batch.generation,items:batch.items.map(item=>({...item,segments:byText.get(item.text)||[]}))}));}}catch(error){window.__furiPumpError=String(error&&error.stack||error);}setTimeout(pump,12);})();` });
-  await page.exposeFunction('__furiBridgeAnalyze', analyzeTexts);
+  await installRenderer(page);
   await page.goto(pathToFileURL(fixture).href, { waitUntil: 'load' });
 
   async function inspect() {
@@ -108,15 +114,15 @@ try {
       .map(node => node.nodeId));
     return inspection.annotations.filter(annotation => ids.has(annotation.nodeId));
   }
-  async function checkProductionSegments(text, annotations) {
+  async function checkProductionSegments(text, annotations, targetPage = page) {
     const expected = (await analyzeTexts([text])).results[0].segments;
     const actual = [...annotations].sort((a, b) => a.segmentStart - b.segmentStart);
     const snapshot = {
       text,
       expected,
       actual,
-      inspection: await inspectDetailed(),
-      react: await page.evaluate(() => window.reactFixture ? window.reactFixture.inspect() : null)
+      inspection: await targetPage.evaluate(() => JSON.parse(window.FuriHook102.inspect(true))),
+      react: await targetPage.evaluate(() => window.reactFixture ? window.reactFixture.inspect() : null)
     };
     segmentCheckNumber++;
     const checkPath = path.join(outputDirectory,
@@ -145,13 +151,22 @@ try {
       }
     }
   }
-  async function settle() {
-    await waitFor(() => {
+  async function settle(targetPage = page) {
+    if (targetPage === page) {
+      await waitFor(() => {
       const data = JSON.parse(window.FuriHook102.inspect());
       return data.scan.initialDone && data.scan.dirtyRoots === 0 && data.scan.dirtyNodes === 0
         && data.scan.pendingBatches === 0 && data.scan.awaitingReadings === 0;
-    }, 'WebView scan and reading queues did not drain');
-    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      }, 'WebView scan and reading queues did not drain');
+    } else {
+      await targetPage.waitForFunction(() => {
+        if (window.__furiPumpError) throw new Error(window.__furiPumpError);
+        const data = JSON.parse(window.FuriHook102.inspect());
+        return data.scan.initialDone && data.scan.dirtyRoots === 0 && data.scan.dirtyNodes === 0
+          && data.scan.pendingBatches === 0 && data.scan.awaitingReadings === 0;
+      }, null, { timeout: 20000 });
+    }
+    await targetPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   }
 
   await waitFor(() => window.reactFixture && window.FuriHook102
@@ -683,7 +698,9 @@ try {
         ? inspection.annotations.filter(item => item.nodeId === host.nodeId) : [];
       return {rangeHeight, transform: getComputedStyle(element).transform,
         layoutPasses: inspection.layoutPasses, annotationCount: annotations.length,
-        readings: annotations.map(item => ({baseText: item.baseText, reading: item.reading})),
+        readings: annotations.map(item => ({segmentStart: item.segmentStart,
+          segmentEnd: item.segmentEnd, baseText: item.baseText, reading: item.reading}))
+          .sort((left, right) => left.segmentStart - right.segmentStart),
         reservation};
     });
   }
@@ -694,13 +711,24 @@ try {
   assert.ok(fractionalInitial.annotationCount > 0,
     `Fractionally scaled Japanese text must retain real Ruby labels: ${JSON.stringify(fractionalInitial)}`);
   assert.equal(fractionalInitial.reservation.status, 'reserved', JSON.stringify(fractionalInitial.reservation));
+  await page.waitForFunction(() => {
+    const inspection = JSON.parse(window.FuriHook102.inspect());
+    const now = performance.now();
+    if (!window.__fractionalQuietStart || window.__fractionalQuietStart.layoutPasses !== inspection.layoutPasses) {
+      window.__fractionalQuietStart = {layoutPasses: inspection.layoutPasses, since: now};
+    }
+    const scan = inspection.scan;
+    return scan.dirtyRoots === 0 && scan.dirtyNodes === 0 && scan.pendingBatches === 0
+      && scan.awaitingReadings === 0 && now - window.__fractionalQuietStart.since >= 300;
+  }, null, { timeout: 5000, polling: 40 });
+  const fractionalSettled = await fractionalLayoutSnapshot();
   await page.waitForTimeout(800);
   const fractionalStable = await fractionalLayoutSnapshot();
-  assert.equal(fractionalStable.layoutPasses, fractionalInitial.layoutPasses,
-    `Fractional layout must stop accumulating passes: ${JSON.stringify({fractionalInitial, fractionalStable})}`);
-  assert.equal(fractionalStable.annotationCount, fractionalInitial.annotationCount,
-    `Fractional layout must retain its Ruby labels: ${JSON.stringify({fractionalInitial, fractionalStable})}`);
-  assert.deepEqual(fractionalStable.readings, fractionalInitial.readings);
+  assert.equal(fractionalStable.layoutPasses, fractionalSettled.layoutPasses,
+    `Fractional layout must stop accumulating passes after settling: ${JSON.stringify({fractionalInitial, fractionalSettled, fractionalStable})}`);
+  assert.equal(fractionalStable.annotationCount, fractionalSettled.annotationCount,
+    `Fractional layout must retain its Ruby labels: ${JSON.stringify({fractionalInitial, fractionalSettled, fractionalStable})}`);
+  assert.deepEqual(fractionalStable.readings, fractionalSettled.readings);
 
   const burstStart = (await inspect()).analyzedSegmentCount;
   await page.evaluate(() => {
@@ -721,6 +749,414 @@ try {
   const burstInspection = await inspect();
   assert.equal(await page.locator('#dynamic-burst > p').count(), 240);
   assert.ok(burstInspection.annotationCount <= 128);
+
+  narrowContext = await context.browser().newContext({
+    viewport: { width: 412, height: 563 }, deviceScaleFactor: 2.625
+  });
+  const narrowPage = await narrowContext.newPage();
+  const narrowPageErrors = [];
+  narrowPage.on('pageerror', error => narrowPageErrors.push(error.message));
+  await installRenderer(narrowPage);
+  await narrowPage.goto(pathToFileURL(viaFixture).href, { waitUntil: 'load' });
+  await narrowPage.waitForFunction(() => window.reactFixture && window.FuriHook102
+    && JSON.parse(window.FuriHook102.inspect()).scan.initialDone, null, { timeout: 20000 });
+  await settle(narrowPage);
+  assert.equal(await narrowPage.evaluate(() => window.devicePixelRatio), 2.625);
+  await narrowPage.evaluate(() => {
+    const article = document.createElement('section');
+    article.id = 'narrow-leading-host-content';
+    for (let index = 0; index < 10; index++) {
+      const paragraph = document.createElement('p');
+      paragraph.textContent = `Host article paragraph ${index}.`;
+      article.appendChild(paragraph);
+    }
+    document.getElementById('react-fixture').before(article);
+  });
+  await settle(narrowPage);
+
+  const narrowInspection = async () => narrowPage.evaluate(() => JSON.parse(window.FuriHook102.inspect()));
+  const narrowDetailedInspection = async () => narrowPage.evaluate(() => JSON.parse(window.FuriHook102.inspect(true)));
+  const narrowAnnotationsFor = (inspection, text) => annotationsFor(inspection, text);
+  const narrowWaitFor = async (predicate, description, argument = null) => {
+    await narrowPage.waitForFunction(predicate, argument, { timeout: 20000, polling: 40 }).catch(async error => {
+      throw new Error(`${description}; last inspection: ${JSON.stringify(await narrowInspection())}`, { cause: error });
+    });
+  };
+  const waitForNarrowQuiet = async (key, stableMs = 300) => {
+    await narrowPage.waitForFunction(({ key, stableMs }) => {
+      const inspection = JSON.parse(window.FuriHook102.inspect());
+      const now = performance.now();
+      const stateKey = `__e2eQuiet_${key}`;
+      if (!window[stateKey] || window[stateKey].layoutPasses !== inspection.layoutPasses) {
+        window[stateKey] = { layoutPasses: inspection.layoutPasses, since: now };
+      }
+      const scan = inspection.scan;
+      return scan.dirtyRoots === 0 && scan.dirtyNodes === 0 && scan.pendingBatches === 0
+        && scan.awaitingReadings === 0 && now - window[stateKey].since >= stableMs;
+    }, { key, stableMs }, { timeout: 5000, polling: 40 });
+  };
+  const narrowTranslationBaseline = await narrowPage.locator('#react-current').evaluate(element => ({
+    lineHeight: getComputedStyle(element).lineHeight, paddingTop: getComputedStyle(element).paddingTop,
+    inlineLineHeight: element.style.getPropertyValue('line-height'),
+    inlinePaddingTop: element.style.getPropertyValue('padding-top')
+  }));
+  await narrowPage.locator('#react-toggle').click();
+  await narrowWaitFor(() => window.reactFixture.inspect().mode === 'original'
+    && window.reactFixture.inspect().postText === '今日は学校へ行きます。',
+  'Narrow viewport React source commit');
+  await narrowPage.locator('#react-current').scrollIntoViewIfNeeded();
+  await settle(narrowPage);
+  const narrowSourceInspection = await narrowInspection();
+  const narrowSourceAnnotations = narrowAnnotationsFor(narrowSourceInspection, reactOriginal);
+  const narrowSourceReservation = reservationFor(await narrowDetailedInspection(), 'react-current');
+  assert.ok(await narrowPage.evaluate(() => window.reactFixture.inspect().postNodeIdentityPreserved));
+  assertReservedSpace(narrowSourceReservation, 'react-current');
+  await checkProductionSegments(reactOriginal, narrowSourceAnnotations, narrowPage);
+  assertGeometry(narrowSourceAnnotations);
+  const narrowSourceLayout = await narrowPage.locator('#react-current').evaluate(element => ({
+    lineHeight: getComputedStyle(element).lineHeight,
+    paddingTop: getComputedStyle(element).paddingTop,
+    inlineLineHeight: element.style.getPropertyValue('line-height'),
+    inlinePaddingTop: element.style.getPropertyValue('padding-top'),
+    width: element.getBoundingClientRect().width,
+    devicePixelRatio: window.devicePixelRatio
+  }));
+  const narrowPassesBeforeOffscreen = (await narrowInspection()).layoutPasses;
+  await narrowPage.evaluate(() => window.scrollTo({ left: 0, top: 0, behavior: 'instant' }));
+  await settle(narrowPage);
+  await narrowWaitFor(() => document.getElementById('react-current').getBoundingClientRect().top >= innerHeight,
+    'React source block must leave the narrow viewport');
+  await narrowPage.waitForFunction(() => {
+    const inspection = JSON.parse(window.FuriHook102.inspect());
+    const now = performance.now();
+    if (!window.__narrowOffscreenQuietStart
+        || window.__narrowOffscreenQuietStart.layoutPasses !== inspection.layoutPasses) {
+      window.__narrowOffscreenQuietStart = {layoutPasses: inspection.layoutPasses, since: now};
+    }
+    const scan = inspection.scan;
+    return scan.dirtyRoots === 0 && scan.dirtyNodes === 0 && scan.pendingBatches === 0
+      && scan.awaitingReadings === 0 && now - window.__narrowOffscreenQuietStart.since >= 300;
+  }, null, { timeout: 5000, polling: 40 });
+  const narrowOffscreen = await narrowPage.locator('#react-current').evaluate(element => ({
+    rect: element.getBoundingClientRect().toJSON(), lineHeight: getComputedStyle(element).lineHeight,
+    paddingTop: getComputedStyle(element).paddingTop,
+    inlineLineHeight: element.style.getPropertyValue('line-height'),
+    inlinePaddingTop: element.style.getPropertyValue('padding-top')
+  }));
+  const narrowOffscreenInspection = await narrowDetailedInspection();
+  const narrowOffscreenReservation = reservationFor(narrowOffscreenInspection, 'react-current');
+  assert.equal(narrowOffscreenReservation.status, 'reserved', JSON.stringify(narrowOffscreenReservation));
+  assert.ok(narrowOffscreen.rect.top >= 563,
+    `The React source must be genuinely outside the 563px viewport: ${JSON.stringify(narrowOffscreen)}`);
+  assert.equal(narrowOffscreen.inlineLineHeight, narrowSourceLayout.inlineLineHeight);
+  assert.equal(narrowOffscreen.inlinePaddingTop, narrowSourceLayout.inlinePaddingTop);
+  assert.equal(narrowOffscreen.lineHeight, narrowSourceLayout.lineHeight);
+  assert.equal(narrowOffscreen.paddingTop, narrowSourceLayout.paddingTop);
+  await narrowPage.waitForTimeout(800);
+  const narrowOffscreenStableInspection = await narrowInspection();
+  assert.equal(narrowOffscreenStableInspection.layoutPasses, narrowOffscreenInspection.layoutPasses,
+    `Offscreen layout must stay quiet: ${JSON.stringify({before: narrowOffscreenInspection.layoutPasses,
+      after: narrowOffscreenStableInspection.layoutPasses})}`);
+  assert.equal(reservationFor(await narrowDetailedInspection(), 'react-current').status, 'reserved');
+
+  await narrowPage.locator('#react-current').scrollIntoViewIfNeeded();
+  await settle(narrowPage);
+  const narrowReturnedInspection = await narrowInspection();
+  const narrowReturnedAnnotations = narrowAnnotationsFor(narrowReturnedInspection, reactOriginal);
+  const narrowReturnedReservation = reservationFor(await narrowDetailedInspection(), 'react-current');
+  assert.equal(narrowReturnedReservation.status, 'reserved', JSON.stringify(narrowReturnedReservation));
+  assert.equal(narrowReturnedReservation.applied.lineHeight, narrowSourceReservation.applied.lineHeight);
+  assert.equal(narrowReturnedReservation.applied.paddingTop, narrowSourceReservation.applied.paddingTop);
+  await checkProductionSegments(reactOriginal, narrowReturnedAnnotations, narrowPage);
+  assertGeometry(narrowReturnedAnnotations);
+  const narrowReturnedLayout = await narrowPage.locator('#react-current').evaluate(element => ({
+    lineHeight: getComputedStyle(element).lineHeight, paddingTop: getComputedStyle(element).paddingTop,
+    inlineLineHeight: element.style.getPropertyValue('line-height'),
+    inlinePaddingTop: element.style.getPropertyValue('padding-top')
+  }));
+  assert.equal(narrowReturnedLayout.lineHeight, narrowSourceLayout.lineHeight);
+  assert.equal(narrowReturnedLayout.paddingTop, narrowSourceLayout.paddingTop);
+  assert.equal(narrowReturnedLayout.inlineLineHeight, narrowSourceLayout.inlineLineHeight);
+  assert.equal(narrowReturnedLayout.inlinePaddingTop, narrowSourceLayout.inlinePaddingTop);
+
+  await narrowPage.locator('#react-toggle').click();
+  await narrowWaitFor(() => window.reactFixture.inspect().mode === 'translation'
+    && window.reactFixture.inspect().postText === '今天去学校学习日语。',
+  'Narrow viewport React translation commit');
+  await settle(narrowPage);
+  const narrowRestored = await narrowPage.locator('#react-current').evaluate(element => ({
+    lineHeight: getComputedStyle(element).lineHeight, paddingTop: getComputedStyle(element).paddingTop,
+    inlineLineHeight: element.style.getPropertyValue('line-height'),
+    inlinePaddingTop: element.style.getPropertyValue('padding-top')
+  }));
+  const narrowRestoredReservation = reservationFor(await narrowDetailedInspection(), 'react-current');
+  assert.equal(narrowRestoredReservation.status, 'restored', JSON.stringify(narrowRestoredReservation));
+  assert.deepEqual(narrowRestored, narrowTranslationBaseline);
+  assert.equal(narrowReturnedLayout.inlineLineHeight, narrowSourceLayout.inlineLineHeight);
+
+  await narrowPage.locator('#react-list-update').click();
+  await narrowWaitFor(() => window.reactFixture.inspect().schoolText === '今日は大学。'
+    && window.reactFixture.inspect().addedText === '明日学校へ行く。',
+  'Narrow viewport React keyed list commit');
+  await narrowPage.locator('#react-row-school').scrollIntoViewIfNeeded();
+  await settle(narrowPage);
+  await waitForNarrowQuiet('react-list');
+  const narrowListInspection = await narrowInspection();
+  const narrowRetainedAnnotations = narrowAnnotationsFor(narrowListInspection, retainedRow);
+  const narrowInsertedAnnotations = narrowAnnotationsFor(narrowListInspection, insertedRow);
+  await checkProductionSegments(retainedRow, narrowRetainedAnnotations, narrowPage);
+  await checkProductionSegments(insertedRow, narrowInsertedAnnotations, narrowPage);
+  assertGeometry(narrowRetainedAnnotations);
+  assertGeometry(narrowInsertedAnnotations);
+  const narrowListQuietStart = await narrowPage.evaluate(() => ({
+    layoutPasses: JSON.parse(window.FuriHook102.inspect()).layoutPasses,
+    scrollY, documentHeight: document.documentElement.scrollHeight,
+    retained: window.reactFixture.inspect().schoolNodeIdentityPreserved,
+    inserted: window.reactFixture.inspect().addedRenderedByReact
+  }));
+  await narrowPage.waitForTimeout(800);
+  const narrowListQuietEnd = await narrowPage.evaluate(() => ({
+    layoutPasses: JSON.parse(window.FuriHook102.inspect()).layoutPasses,
+    scrollY, documentHeight: document.documentElement.scrollHeight,
+    retained: window.reactFixture.inspect().schoolNodeIdentityPreserved,
+    inserted: window.reactFixture.inspect().addedRenderedByReact
+  }));
+  assert.deepEqual(narrowListQuietEnd, narrowListQuietStart,
+    `Narrow viewport list layout must remain stable: ${JSON.stringify({narrowListQuietStart, narrowListQuietEnd})}`);
+
+  const capacityText = '学校へ行きます。';
+  const capacitySegments = (await analyzeTexts([capacityText])).results[0].segments;
+  const capacityCount = 150;
+  await narrowPage.evaluate(({ text, count }) => {
+    const root = document.createElement('section');
+    root.id = 'reservation-capacity-list';
+    for (let index = 0; index < count; index++) {
+      const paragraph = document.createElement('p');
+      paragraph.id = `reservation-capacity-${index}`;
+      paragraph.appendChild(document.createTextNode(text));
+      root.appendChild(paragraph);
+    }
+    document.getElementById('react-fixture').after(root);
+    window.__capacityBaselineStyles = new Map(Array.from(root.children, element => [element.id, {
+      lineHeight: getComputedStyle(element).lineHeight, paddingTop: getComputedStyle(element).paddingTop,
+      inlineLineHeight: element.style.getPropertyValue('line-height'),
+      inlinePaddingTop: element.style.getPropertyValue('padding-top')
+    }]));
+  }, { text: capacityText, count: capacityCount });
+  await narrowWaitFor(({ expected }) => {
+    const data = JSON.parse(window.FuriHook102.inspect());
+    const records = [...window.__FuriHook102.records.values()]
+      .filter(record => record.node.parentElement?.closest('#reservation-capacity-list')
+        && record.segments?.length === expected.segmentCount);
+    return records.length === expected.count && data.scan.dirtyRoots === 0 && data.scan.dirtyNodes === 0
+      && data.scan.pendingBatches === 0 && data.scan.awaitingReadings === 0;
+  }, 'Capacity list production readings did not finish',
+  { expected: { count: capacityCount, segmentCount: capacitySegments.length } });
+  const capacityChecks = [];
+  for (let index = 0; index < capacityCount; index++) {
+    const id = `reservation-capacity-${index}`;
+    await narrowPage.locator(`#${id}`).evaluate(element =>
+      element.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    await settle(narrowPage);
+    await narrowWaitFor(({ id, text }) => {
+      const inspection = JSON.parse(window.FuriHook102.inspect());
+      const nodeIds = new Set([...window.__FuriHook102.records.values()]
+        .filter(record => record.node.parentElement?.id === id && record.node.data === text)
+        .map(record => record.nodeId));
+      return nodeIds.size > 0 && inspection.annotations.some(item => nodeIds.has(item.nodeId) && item.visible);
+    }, `No visible real Ruby annotation for ${id}`, { id, text: capacityText });
+    const snapshot = await narrowPage.locator(`#${id}`).evaluate(element => {
+      const inspection = JSON.parse(window.FuriHook102.inspect(true));
+      const reservation = inspection.layoutReservations.findLast(item => item.elementId === element.id);
+      const node = element.firstChild;
+      const records = [...window.__FuriHook102.records.values()].filter(record => record.node === node);
+      const nodeIds = new Set(records.map(record => record.nodeId));
+      const annotations = inspection.annotations.filter(item => nodeIds.has(item.nodeId));
+      return {id: element.id, text: node.data, baseline: window.__capacityBaselineStyles.get(element.id),
+        segmentCount: records.reduce((count, record) => count + (record.segments?.length || 0), 0),
+        annotationCount: annotations.length,
+        readings: annotations.map(item => ({segmentStart: item.segmentStart,
+          segmentEnd: item.segmentEnd, baseText: item.baseText, reading: item.reading}))
+          .sort((left, right) => left.segmentStart - right.segmentStart),
+        reservation, lineHeight: getComputedStyle(element).lineHeight,
+        paddingTop: getComputedStyle(element).paddingTop};
+    });
+    assert.equal(snapshot.text, capacityText);
+    assert.equal(snapshot.segmentCount, capacitySegments.length, JSON.stringify(snapshot));
+    assert.ok(snapshot.annotationCount > 0, JSON.stringify(snapshot));
+    assert.deepEqual(snapshot.readings, capacitySegments.map(segment => ({
+      segmentStart: segment.startUtf16, segmentEnd: segment.endUtf16,
+      baseText: segment.baseText, reading: segment.reading
+    })), JSON.stringify(snapshot));
+    assert.equal(snapshot.reservation.status, 'reserved', JSON.stringify(snapshot.reservation));
+    capacityChecks.push(snapshot);
+  }
+  const capacityInspection = await narrowDetailedInspection();
+  const capacityResourceState = await narrowPage.evaluate(() => {
+    const elements = Array.from(document.querySelectorAll('#reservation-capacity-list > p'));
+    const reservations = window.__FuriHook102.layoutReservations;
+    const diagnostics = JSON.parse(window.FuriHook102.inspect(true)).layoutReservations
+      .filter(item => item.elementId.startsWith('reservation-capacity-'));
+    const diagnosticById = new Map(diagnostics.map(item => [item.elementId, item]));
+    const rows = elements.map(element => {
+      const reservation = reservations.get(element) || null;
+      const lineDeclaration = reservation?.applied?.['line-height'];
+      const paddingDeclaration = reservation?.applied?.['padding-top'];
+      return {id: element.id, connected: element.isConnected,
+        hasActiveReservation: Boolean(reservation),
+        reservationBaseline: reservation?.baseline || null,
+        reservationApplied: reservation?.applied || null,
+        inlineLineHeight: element.style.getPropertyValue('line-height'),
+        inlinePaddingTop: element.style.getPropertyValue('padding-top'),
+        ownedDeclarationMatches: Boolean(reservation && lineDeclaration && paddingDeclaration
+          && element.style.getPropertyValue('line-height') === lineDeclaration.value
+          && element.style.getPropertyPriority('line-height') === lineDeclaration.priority
+          && element.style.getPropertyValue('padding-top') === paddingDeclaration.value
+          && element.style.getPropertyPriority('padding-top') === paddingDeclaration.priority),
+        computedLineHeight: getComputedStyle(element).lineHeight,
+        computedPaddingTop: getComputedStyle(element).paddingTop,
+        diagnostic: diagnosticById.get(element.id) || null};
+    });
+    const active = [...reservations.entries()]
+      .filter(([element]) => element.id.startsWith('reservation-capacity-'))
+      .map(([element, reservation]) => ({id: element.id, baseline: reservation.baseline,
+        applied: reservation.applied}));
+    const statusCounts = {};
+    for (const item of diagnostics) statusCounts[item.status] = (statusCounts[item.status] || 0) + 1;
+    return {mapSize: reservations.size, activeCapacityCount: active.length, active,
+      diagnosticsCount: diagnostics.length, statusCounts,
+      ownedDeclarationMatchCount: rows.filter(row => row.ownedDeclarationMatches).length, rows};
+  });
+  await writeFile(path.join(outputDirectory, 'narrow-dpr-capacity-resource-inspection.json'),
+    `${JSON.stringify(capacityResourceState, null, 2)}\n`);
+  const diagnosticReservedCapacityCount = capacityInspection.layoutReservations
+    .filter(item => item.elementId.startsWith('reservation-capacity-') && item.status === 'reserved').length;
+  assert.ok(capacityResourceState.activeCapacityCount > 128
+    && capacityResourceState.ownedDeclarationMatchCount === capacityCount
+    && capacityResourceState.rows.every(row => row.hasActiveReservation
+      && row.computedLineHeight === row.inlineLineHeight
+      && row.computedPaddingTop === row.inlinePaddingTop),
+    `More than 128 real host blocks must retain module-owned space reservations: ${JSON.stringify({
+      diagnosticReservedCapacityCount, activeCapacityCount: capacityResourceState.activeCapacityCount,
+      ownedDeclarationMatchCount: capacityResourceState.ownedDeclarationMatchCount,
+      diagnosticsCount: capacityResourceState.diagnosticsCount,
+      statusCounts: capacityResourceState.statusCounts,
+      evidence: path.join(outputDirectory, 'narrow-dpr-capacity-resource-inspection.json')})}`);
+  await waitForNarrowQuiet('capacity-list');
+  const capacityQuietStart = await narrowPage.evaluate(() => ({
+    layoutPasses: JSON.parse(window.FuriHook102.inspect()).layoutPasses,
+    scrollY, documentHeight: document.documentElement.scrollHeight,
+    annotationCount: JSON.parse(window.FuriHook102.inspect()).annotationCount
+  }));
+  await narrowPage.waitForTimeout(800);
+  const capacityQuietEnd = await narrowPage.evaluate(() => ({
+    layoutPasses: JSON.parse(window.FuriHook102.inspect()).layoutPasses,
+    scrollY, documentHeight: document.documentElement.scrollHeight,
+    annotationCount: JSON.parse(window.FuriHook102.inspect()).annotationCount
+  }));
+  assert.deepEqual(capacityQuietEnd, capacityQuietStart,
+    `Capacity list must remain stable: ${JSON.stringify({capacityQuietStart, capacityQuietEnd})}`);
+
+  const changedCapacityId = 'reservation-capacity-0';
+  const changedCapacityBefore = await narrowPage.locator(`#${changedCapacityId}`).evaluate(element => ({
+    nodeId: [...window.__FuriHook102.records.values()]
+      .find(record => record.node === element.firstChild)?.nodeId,
+    lineHeight: getComputedStyle(element).lineHeight, paddingTop: getComputedStyle(element).paddingTop,
+    inlineLineHeight: element.style.getPropertyValue('line-height'),
+    inlinePaddingTop: element.style.getPropertyValue('padding-top'),
+    baseline: window.__capacityBaselineStyles.get(element.id)
+  }));
+  await narrowPage.locator(`#${changedCapacityId}`).evaluate(element => {
+    window.__e2eCapacityNode = element.firstChild;
+  });
+  await narrowPage.locator(`#${changedCapacityId}`).evaluate(element => { element.firstChild.data = 'Host text updated.'; });
+  await settle(narrowPage);
+  const changedCapacityAfter = await narrowPage.locator(`#${changedCapacityId}`).evaluate(element => {
+    const inspection = JSON.parse(window.FuriHook102.inspect(true));
+    const reservation = inspection.layoutReservations.findLast(item => item.elementId === element.id);
+    const node = element.firstChild;
+    const records = [...window.__FuriHook102.records.values()].filter(record => record.node === node);
+    return {sameNode: node === window.__e2eCapacityNode, text: node.data,
+      activeReservation: window.__FuriHook102.layoutReservations.has(element),
+      hasReadings: records.some(record => record.segments?.length), reservation,
+      lineHeight: getComputedStyle(element).lineHeight, paddingTop: getComputedStyle(element).paddingTop,
+      inlineLineHeight: element.style.getPropertyValue('line-height'),
+      inlinePaddingTop: element.style.getPropertyValue('padding-top')};
+  });
+  assert.equal(changedCapacityAfter.sameNode, true);
+  assert.equal(changedCapacityAfter.activeReservation, false);
+  assert.equal(changedCapacityAfter.text, 'Host text updated.');
+  assert.equal(changedCapacityAfter.hasReadings, false);
+  assert.equal(changedCapacityAfter.reservation.status, 'restored', JSON.stringify(changedCapacityAfter.reservation));
+  assert.equal(changedCapacityAfter.inlineLineHeight, '');
+  assert.equal(changedCapacityAfter.inlinePaddingTop, '');
+  assert.equal(changedCapacityAfter.lineHeight, changedCapacityBefore.baseline.lineHeight);
+  assert.equal(changedCapacityAfter.paddingTop, changedCapacityBefore.baseline.paddingTop);
+
+  const removedCapacity = await narrowPage.locator('#reservation-capacity-1').evaluate(element => {
+    window.__removedCapacityNode = element.firstChild;
+    window.__removedCapacityElement = element;
+    return {text: element.firstChild.data,
+      baseline: window.__capacityBaselineStyles.get(element.id),
+      recordIds: [...window.__FuriHook102.records.values()]
+        .filter(record => record.node === element.firstChild).map(record => record.nodeId)};
+  });
+  assert.ok(removedCapacity.recordIds.length > 0);
+  await narrowPage.locator('#reservation-capacity-1').evaluate(element => element.remove());
+  await settle(narrowPage);
+  const removedCapacityState = await narrowPage.evaluate((recordIds) => ({
+    elementDisconnected: !document.getElementById('reservation-capacity-1'),
+    nodeDisconnected: !window.__removedCapacityNode.isConnected,
+    recordCount: [...window.__FuriHook102.records.values()].filter(record => recordIds.includes(record.nodeId)).length,
+    activeReservation: [...window.__FuriHook102.layoutReservations.keys()]
+      .some(element => element.id === 'reservation-capacity-1'),
+    inlineLineHeight: window.__removedCapacityElement.style.getPropertyValue('line-height'),
+    inlinePaddingTop: window.__removedCapacityElement.style.getPropertyValue('padding-top'),
+    computedLineHeight: getComputedStyle(window.__removedCapacityElement).lineHeight,
+    computedPaddingTop: getComputedStyle(window.__removedCapacityElement).paddingTop,
+    reservation: JSON.parse(window.FuriHook102.inspect(true)).layoutReservations
+      .findLast(item => item.elementId === 'reservation-capacity-1')
+  }), removedCapacity.recordIds);
+  assert.equal(removedCapacityState.elementDisconnected, true);
+  assert.equal(removedCapacityState.nodeDisconnected, true);
+  assert.equal(removedCapacityState.recordCount, 0);
+  assert.equal(removedCapacityState.activeReservation, false);
+  assert.equal(removedCapacityState.inlineLineHeight, removedCapacity.baseline.inlineLineHeight);
+  assert.equal(removedCapacityState.inlinePaddingTop, removedCapacity.baseline.inlinePaddingTop);
+  assert.equal(removedCapacityState.computedLineHeight, removedCapacity.baseline.lineHeight);
+  assert.equal(removedCapacityState.computedPaddingTop, removedCapacity.baseline.paddingTop);
+  assert.equal(removedCapacityState.reservation.status, 'restored',
+    JSON.stringify(removedCapacityState.reservation));
+
+  const narrowReport = {
+    viewport: { width: 412, height: 563, deviceScaleFactor: 2.625 },
+    sourceLayout: narrowSourceLayout,
+    passesBeforeOffscreen: narrowPassesBeforeOffscreen,
+    offscreenInspection: narrowOffscreenInspection,
+    offscreenStableInspection: narrowOffscreenStableInspection,
+    returnedInspection: narrowReturnedInspection,
+    returnedLayout: narrowReturnedLayout,
+    restoredLayout: narrowRestored,
+    listQuietStart: narrowListQuietStart,
+    listQuietEnd: narrowListQuietEnd,
+    capacityCount,
+    capacitySegmentCount: capacitySegments.length,
+    capacityReservationsRetained: capacityResourceState.activeCapacityCount,
+    capacityReservationDiagnosticReserved: diagnosticReservedCapacityCount,
+    capacityReservationDiagnosticStatuses: capacityResourceState.statusCounts,
+    capacityOwnedDeclarationMatchCount: capacityResourceState.ownedDeclarationMatchCount,
+    capacityChecks,
+    capacityQuietStart,
+    capacityQuietEnd,
+    changedCapacityBefore,
+    changedCapacityAfter,
+    removedCapacity,
+    removedCapacityState,
+    browserErrors: narrowPageErrors
+  };
+  await writeFile(path.join(outputDirectory, 'narrow-dpr-reservation-e2e.json'),
+    `${JSON.stringify(narrowReport, null, 2)}\n`);
+  assert.deepEqual(narrowPageErrors, [], `Narrow viewport browser errors: ${narrowPageErrors.join('\n')}`);
 
   const oldInstanceId = await page.evaluate(() => window.fixtureState.instanceId);
   const oldGeneration = (await inspect()).generation;
@@ -776,7 +1212,12 @@ try {
     protectedTextAnnotations: annotationsFor(protectedInspection, protectedText),
     fixedReservation,
     insufficientReservation,
-    fractionalStability: {initial: fractionalInitial, after800ms: fractionalStable},
+    fractionalStability: {initial: fractionalInitial, afterQuietStart: fractionalSettled,
+      afterSecond800ms: fractionalStable},
+    narrowDprReservationEvidence: path.join(outputDirectory, 'narrow-dpr-reservation-e2e.json'),
+    narrowDprCapacity: {count: narrowReport.capacityCount,
+      segmentCount: narrowReport.capacitySegmentCount,
+      reservationsRetained: narrowReport.capacityReservationsRetained},
     reactOriginalAnnotations: originalAnnotations,
     retainedListAnnotations: retainedAnnotations,
     insertedListAnnotations: insertedAnnotations,
@@ -798,6 +1239,7 @@ try {
   await writeFile(path.join(outputDirectory, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   process.stdout.write(`WEBVIEW_RECONCILIATION_E2E_REPORT=${path.join(outputDirectory, 'report.json')}\n`);
 } finally {
+  if (narrowContext) await narrowContext.close();
   await context.close();
   bridge.stdin.end();
 }
