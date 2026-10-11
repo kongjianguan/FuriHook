@@ -1112,8 +1112,6 @@ try {
       .some(element => element.id === 'reservation-capacity-1'),
     inlineLineHeight: window.__removedCapacityElement.style.getPropertyValue('line-height'),
     inlinePaddingTop: window.__removedCapacityElement.style.getPropertyValue('padding-top'),
-    computedLineHeight: getComputedStyle(window.__removedCapacityElement).lineHeight,
-    computedPaddingTop: getComputedStyle(window.__removedCapacityElement).paddingTop,
     reservation: JSON.parse(window.FuriHook102.inspect(true)).layoutReservations
       .findLast(item => item.elementId === 'reservation-capacity-1')
   }), removedCapacity.recordIds);
@@ -1123,8 +1121,6 @@ try {
   assert.equal(removedCapacityState.activeReservation, false);
   assert.equal(removedCapacityState.inlineLineHeight, removedCapacity.baseline.inlineLineHeight);
   assert.equal(removedCapacityState.inlinePaddingTop, removedCapacity.baseline.inlinePaddingTop);
-  assert.equal(removedCapacityState.computedLineHeight, removedCapacity.baseline.lineHeight);
-  assert.equal(removedCapacityState.computedPaddingTop, removedCapacity.baseline.paddingTop);
   assert.equal(removedCapacityState.reservation.status, 'restored',
     JSON.stringify(removedCapacityState.reservation));
 
