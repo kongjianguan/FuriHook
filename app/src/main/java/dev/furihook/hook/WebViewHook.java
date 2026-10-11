@@ -103,6 +103,7 @@ public final class WebViewHook {
         private static final long POLL_INTERVAL_MS = 900L;
         private static final int MAX_INJECT_ATTEMPTS = 20;
         private static final String JS_ASSET = "furihook-web.js";
+        private static final long LAYOUT_SAMPLE_DELAY_MS = 250L;
 
         private final XposedModule module;
         private final ModuleLog log;
@@ -195,6 +196,7 @@ public final class WebViewHook {
                 if (state != null) {
                     state.polling = false;
                     state.injecting = false;
+                    cancelLayoutSample(state);
                     main.removeCallbacks(state.contentPoll);
                     main.removeCallbacks(state.injectionPoll);
                 }
@@ -285,6 +287,7 @@ public final class WebViewHook {
 
         private void advance(PageState state) {
             state.generation++;
+            cancelLayoutSample(state);
             state.injectionAttempts = 0;
             state.injecting = true;
             state.installed = false;
@@ -530,26 +533,65 @@ public final class WebViewHook {
                         value -> {
                             if (generation != state.generation) return;
                             state.inFlight = false;
-                            if (BuildConfig.DETECTION_LOGS) {
-                                try {
-                                    Object parsed = new JSONTokener(value).nextValue();
-                                    if (parsed instanceof Number) {
-                                        int count = ((Number) parsed).intValue();
-                                        if (count > 0 && appliedLogs.acquire(SystemClock.elapsedRealtime())) {
-                                            log.event("{\"event\":\"webview_ruby_applied\",\"package\":\""
-                                                    + safeJson(packageName) + "\",\"process\":\""
-                                                    + safeJson(processName) + "\",\"count\":" + count + "}");
-                                        }
-                                    }
-                                } catch (Throwable failure) {
-                                    log.failure("webview_apply_count_parse_failed", failure);
-                                }
-                            }
+                            scheduleLayoutSample(state, generation);
                         });
             } catch (Throwable failure) {
                 state.inFlight = false;
                 log.failure("webview_ruby_apply_failed", failure);
             }
+        }
+
+        private void scheduleLayoutSample(PageState state, long generation) {
+            long now = SystemClock.elapsedRealtime();
+            if (!BuildConfig.DETECTION_LOGS || generation != state.generation || !state.polling
+                    || state.layoutSamplePending || now - state.lastLayoutSampleAt < POLL_INTERVAL_MS) return;
+            state.layoutSamplePending = true;
+            state.lastLayoutSampleAt = now;
+            Runnable sample = () -> sampleLayout(state, generation);
+            state.layoutSample = sample;
+            main.postDelayed(sample, LAYOUT_SAMPLE_DELAY_MS);
+        }
+
+        private void sampleLayout(PageState state, long generation) {
+            if (generation != state.generation) return;
+            state.layoutSample = null;
+            WebView view = state.view.get();
+            if (view == null || !state.polling) {
+                state.layoutSamplePending = false;
+                return;
+            }
+            String source = "(()=>{const s=window.__FuriHook102;if(!s||s.generation!=="
+                    + generation + ")return -1;let n=0;for(const r of s.records.values())n+=r.labels.length;return n})()";
+            try {
+                view.evaluateJavascript(source, value -> {
+                    if (generation != state.generation) return;
+                    state.layoutSamplePending = false;
+                    if (!state.polling) return;
+                    try {
+                        Object parsed = new JSONTokener(value).nextValue();
+                        if (!(parsed instanceof Number)) return;
+                        int count = ((Number) parsed).intValue();
+                        if (count > 0 && appliedLogs.acquire(SystemClock.elapsedRealtime())) {
+                            log.event("{\"event\":\"webview_ruby_applied\",\"package\":\""
+                                    + safeJson(packageName) + "\",\"process\":\""
+                                    + safeJson(processName) + "\",\"generation\":" + generation
+                                    + ",\"count\":" + count + "}");
+                        }
+                    } catch (Throwable failure) {
+                        log.failure("webview_layout_count_parse_failed", failure);
+                    }
+                });
+            } catch (Throwable failure) {
+                state.layoutSamplePending = false;
+                log.failure("webview_layout_count_read_failed", failure);
+            }
+        }
+
+        private void cancelLayoutSample(PageState state) {
+            Runnable sample = state.layoutSample;
+            if (sample != null) main.removeCallbacks(sample);
+            state.layoutSample = null;
+            state.layoutSamplePending = false;
         }
 
         private void drop(PageState state, Work work) {
@@ -579,6 +621,7 @@ public final class WebViewHook {
 
         private void forget(PageState state) {
             state.generation++;
+            cancelLayoutSample(state);
             state.injecting = false;
             state.polling = false;
             state.installed = false;
@@ -606,6 +649,9 @@ public final class WebViewHook {
             volatile boolean installed;
             volatile boolean inFlight;
             volatile boolean pullInFlight;
+            volatile boolean layoutSamplePending;
+            volatile Runnable layoutSample;
+            volatile long lastLayoutSampleAt = -POLL_INTERVAL_MS;
             int injectionAttempts;
             final Runnable injectionPoll = () -> inject(this);
             final Runnable contentPoll = new Runnable() {
