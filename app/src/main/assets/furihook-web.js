@@ -12,6 +12,7 @@
   const MAX_PENDING_BATCHES = 7;
   const MAX_TRACKED_RECORDS = 4096;
   const MAX_VISIBLE_ANNOTATIONS = 128;
+  const MAX_LAYOUT_RESERVATIONS = 128;
   const MAX_OCCUPANCY_NODES = 2048;
   const KANJI = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u{20000}-\u{2fa1d}]/u;
   const KANA = /[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9d]/u;
@@ -19,6 +20,7 @@
   const OWNED = "[data-furihook-owned='1']";
   const PAINTED_TAGS = new Set(["img", "svg", "canvas", "video", "audio", "iframe", "object", "embed",
     "button", "input", "select", "textarea", "option", "meter", "progress", "output", "fieldset"]);
+  const RESERVABLE_TAGS = new Set(["p", "div", "article", "section", "blockquote", "li", "h1", "h2", "h3", "h4", "h5", "h6", "dd", "dt"]);
   const XHTML = "http://www.w3.org/1999/xhtml";
   const VIEWPORT_MARGIN = 24;
   const measureContext = document.createElement("canvas").getContext("2d");
@@ -64,6 +66,10 @@
       animationPending: false,
       hidden: document.visibilityState === "hidden",
       layoutRejections: [],
+      layoutReservations: new Map(),
+      reservationDiagnostics: [],
+      layoutExclusions: new WeakMap(),
+      ownStyleWrites: new WeakMap(),
       textRectSources: new WeakMap(),
       stats: {layoutPasses: 0, skippedOverlapCount: 0, skippedClippedCount: 0,
         skippedOccludedCount: 0, skippedGeometryCount: 0, staleResultCount: 0}
@@ -75,6 +81,20 @@
 
     function noteRejection(rejection) {
       if (state.layoutRejections.length < 128) state.layoutRejections.push(rejection);
+    }
+
+    function noteReservation(reservation) {
+      if (reservation.element) {
+        if (reservation.status === "excluded") state.layoutExclusions.set(reservation.element, reservation.reason || "excluded");
+        else if (reservation.status === "reserved") state.layoutExclusions.delete(reservation.element);
+      }
+      const existingIndex = reservation.element
+        ? state.reservationDiagnostics.findIndex(item => item.element === reservation.element) : -1;
+      if (existingIndex >= 0) {
+        state.reservationDiagnostics[existingIndex] = reservation;
+      } else if (state.reservationDiagnostics.length < MAX_LAYOUT_RESERVATIONS) {
+        state.reservationDiagnostics.push(reservation);
+      }
     }
 
     function ensureOverlay() {
@@ -110,8 +130,17 @@
         state.observer = new MutationObserver(function (mutations) {
           let languageChanged = false;
           let layoutChanged = false;
+          const ownStyleTargets = new Set();
           for (const mutation of mutations) {
             if (mutation.target.nodeType === 1 && mutation.target.matches(OWNED)) continue;
+            if (mutation.type === "attributes" && mutation.attributeName === "style"
+                && state.ownStyleWrites.get(mutation.target) === mutation.target.getAttribute("style")) {
+              ownStyleTargets.add(mutation.target);
+              continue;
+            }
+            if (mutation.type === "attributes" && mutation.attributeName === "style") {
+              state.ownStyleWrites.delete(mutation.target);
+            }
             if (mutation.type === "characterData") {
               invalidateNode(mutation.target);
               queueDirtyNode(mutation.target);
@@ -142,6 +171,7 @@
               layoutChanged = true;
             }
           }
+          for (const element of ownStyleTargets) state.ownStyleWrites.delete(element);
           if (languageChanged) state.languageCache = new WeakMap();
           if (layoutChanged) {
             scheduleLayout();
@@ -608,6 +638,215 @@
       return Array.from(range.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0);
     }
 
+    function makeLabel(segment, base, font, metrics, top, hidden) {
+      const label = document.createElement("span");
+      label.setAttribute("data-furihook-owned", "1");
+      label.setAttribute("data-furihook-reading", segment[2]);
+      label.textContent = segment[2];
+      label.style.cssText = "all:initial!important;position:absolute!important;display:block!important;box-sizing:content-box!important;white-space:nowrap!important;pointer-events:none!important;user-select:none!important;-webkit-user-select:none!important;line-height:1!important;margin:0!important;padding:0!important;border:0!important;text-align:center!important;transform:translateX(-50%) scale(" + metrics.scaleX + "," + metrics.scaleY + ")!important;transform-origin:top center!important;";
+      label.style.setProperty("left", ((base.left + base.right) / 2) + "px", "important");
+      label.style.setProperty("top", top + "px", "important");
+      label.style.setProperty("font-style", font.fontStyle, "important");
+      label.style.setProperty("font-weight", font.fontWeight, "important");
+      label.style.setProperty("font-size", font.fontSize + "px", "important");
+      label.style.setProperty("font-family", font.fontFamily, "important");
+      label.style.setProperty("font-stretch", font.fontStretch, "important");
+      label.style.setProperty("color", font.color, "important");
+      if (hidden) label.style.setProperty("visibility", "hidden", "important");
+      return label;
+    }
+
+    function reservationBlockReason(element) {
+      const style = getComputedStyle(element);
+      if (!RESERVABLE_TAGS.has(element.localName)) return "unsupported-element";
+      if (style.display !== "block" && style.display !== "flow-root" && style.display !== "list-item") return "unsupported-display";
+      if (style.position !== "static" || style.float !== "none") return "complex-layout";
+      if (style.writingMode !== "horizontal-tb" || style.contain !== "none"
+          || style.columnCount !== "auto" || style.columnWidth !== "auto") return "complex-layout";
+      if (element.style.getPropertyValue("height") || element.style.getPropertyValue("block-size")
+          || style.maxHeight !== "none" || style.maxBlockSize !== "none") return "fixed-size";
+      if (element.closest("[contenteditable]:not([contenteditable='false'])") || element.matches(SKIP)) return "interactive";
+      const parentStyle = element.parentElement ? getComputedStyle(element.parentElement) : null;
+      if (!parentStyle || parentStyle.display.includes("flex") || parentStyle.display.includes("grid")
+          || parentStyle.display.includes("table") || parentStyle.columnCount !== "auto"
+          || parentStyle.columnWidth !== "auto") return "complex-layout";
+      if (style.overflowX !== "visible" || style.overflowY !== "visible"
+          || (style.whiteSpace !== "normal" && style.whiteSpace !== "pre-wrap" && style.whiteSpace !== "pre-line")) return "existing-space";
+      let ancestor = element.parentElement;
+      while (ancestor && ancestor !== document.documentElement) {
+        const ancestorStyle = getComputedStyle(ancestor);
+        if (ancestorStyle.overflowX !== "visible" || ancestorStyle.overflowY !== "visible") return "ancestor-clip";
+        if (ancestor.style.getPropertyValue("height") || ancestor.style.getPropertyValue("block-size")
+            || ancestorStyle.maxHeight !== "none" || ancestorStyle.maxBlockSize !== "none") return "ancestor-fixed-size";
+        ancestor = ancestor.parentElement;
+      }
+      return "";
+    }
+
+    function inlineDeclaration(element, property) {
+      return {value: element.style.getPropertyValue(property), priority: element.style.getPropertyPriority(property)};
+    }
+
+    function declarationMatches(element, property, declaration) {
+      return element.style.getPropertyValue(property) === declaration.value
+        && element.style.getPropertyPriority(property) === declaration.priority;
+    }
+
+    function writeReservationStyle(element, reservation, property, value) {
+      element.style.setProperty(property, value);
+      reservation.applied[property] = inlineDeclaration(element, property);
+      state.ownStyleWrites.set(element, element.getAttribute("style"));
+    }
+
+    function restoreReservation(element, reservation) {
+      for (const property of ["line-height", "padding-top"]) {
+        if (!declarationMatches(element, property, reservation.applied[property])) continue;
+        const original = reservation.original[property];
+        if (original.value) element.style.setProperty(property, original.value, original.priority);
+        else element.style.removeProperty(property);
+        state.ownStyleWrites.set(element, element.getAttribute("style"));
+      }
+    }
+
+    function prepareLayoutReservations(layer, viewport) {
+      const needed = new Map();
+      let measured = 0;
+      for (const record of state.records.values()) {
+        if (measured >= MAX_VISIBLE_ANNOTATIONS) break;
+        if (!record.segments || !record.segments.length || !record.node.isConnected
+            || record.node.data.slice(record.offset, record.offset + record.text.length) !== record.text
+            || blocked(record.node) || !elementVisible(record.node.parentElement)) continue;
+        const hostBox = record.node.parentElement.getBoundingClientRect();
+        if (hostBox.right < viewport.left - VIEWPORT_MARGIN || hostBox.left > viewport.right + VIEWPORT_MARGIN
+            || hostBox.bottom < viewport.top - VIEWPORT_MARGIN || hostBox.top > viewport.bottom + VIEWPORT_MARGIN) continue;
+        const element = record.parent;
+        const reason = reservationBlockReason(element);
+        if (reason) {
+          noteReservation({element: element,
+            status: reason === "existing-space" || reason === "ancestor-clip" || reason === "ancestor-fixed-size"
+              ? "unmanaged" : "excluded", reason: reason});
+          continue;
+        }
+        for (const segment of record.segments) {
+          if (measured >= MAX_VISIBLE_ANNOTATIONS) break;
+          if (!Array.isArray(segment) || segment.length < 3 || !Number.isInteger(segment[0])
+              || !Number.isInteger(segment[1]) || segment[0] < 0 || segment[1] <= segment[0]
+              || segment[1] > record.text.length || typeof segment[2] !== "string" || !segment[2]) continue;
+          const fragments = segmentRects(record, segment);
+          if (fragments.length !== 1) continue;
+          const base = fragments[0];
+          if (base.right < viewport.left - VIEWPORT_MARGIN || base.left > viewport.right + VIEWPORT_MARGIN
+              || base.bottom < viewport.top - VIEWPORT_MARGIN || base.top > viewport.bottom + VIEWPORT_MARGIN) continue;
+          const font = textStyle(record.node.parentElement);
+          if (font.writingMode !== "horizontal-tb" || hasUnsupportedTransform(record.node.parentElement)) continue;
+          const baseText = record.text.slice(segment[0], segment[1]);
+          const metrics = labelMetrics(segment[2], baseText, font, base, transformScale(record.node.parentElement));
+          const gap = Math.max(1, font.fontSize * 0.16);
+          const label = makeLabel(segment, base, font, metrics, 0, true);
+          layer.appendChild(label);
+          const labelRect = label.getBoundingClientRect();
+          label.remove();
+          const prospective = {left: (base.left + base.right) / 2 - labelRect.width / 2,
+            right: (base.left + base.right) / 2 + labelRect.width / 2,
+            top: base.top - labelRect.height - gap, bottom: base.top - gap};
+          const clip = clippingRect(record.node, viewport);
+          if (isClipped(prospective, clip) || isClipped(prospective, viewport)) {
+            noteReservation({element: element, status: "excluded", reason: "clipped"});
+            continue;
+          }
+          const current = needed.get(element) || {rangeHeight: 0, labelHeight: 0, gap: 0};
+          current.rangeHeight = Math.max(current.rangeHeight, base.height);
+          current.labelHeight = Math.max(current.labelHeight, labelRect.height);
+          current.gap = Math.max(current.gap, gap);
+          needed.set(element, current);
+          measured++;
+        }
+      }
+
+      for (const [element, reservation] of state.layoutReservations) {
+        if (needed.has(element)) continue;
+        restoreReservation(element, reservation);
+        state.layoutReservations.delete(element);
+        noteReservation({element: element, status: "restored", reason: "no-readings",
+          baseline: reservation.baseline,
+          applied: {lineHeight: reservation.applied["line-height"].value,
+            paddingTop: reservation.applied["padding-top"].value}, required: reservation.required});
+      }
+
+      let changed = false;
+      for (const [element, metrics] of needed) {
+        let reservation = state.layoutReservations.get(element);
+        if (reservation && (!declarationMatches(element, "line-height", reservation.applied["line-height"])
+            || !declarationMatches(element, "padding-top", reservation.applied["padding-top"]))) {
+          restoreReservation(element, reservation);
+          state.layoutReservations.delete(element);
+          reservation = null;
+          noteReservation({element: element, status: "excluded", reason: "host-style-change"});
+        }
+        if (!reservation && state.layoutReservations.size >= MAX_LAYOUT_RESERVATIONS) {
+          noteReservation({element: element, status: "excluded", reason: "reservation-limit"});
+          continue;
+        }
+        const style = getComputedStyle(element);
+        const currentLineHeight = Number.parseFloat(style.lineHeight);
+        const baseLineHeight = Number.isFinite(currentLineHeight) ? currentLineHeight : metrics.rangeHeight;
+        const currentPadding = Number.parseFloat(style.paddingTop) || 0;
+        if (!reservation) {
+          if (inlineDeclaration(element, "line-height").priority === "important"
+              || inlineDeclaration(element, "padding-top").priority === "important") {
+            noteReservation({element: element, status: "excluded", reason: "important-style"});
+            continue;
+          }
+          reservation = {original: {"line-height": inlineDeclaration(element, "line-height"),
+            "padding-top": inlineDeclaration(element, "padding-top")}, applied: {},
+            baseline: {lineHeight: style.lineHeight, paddingTop: style.paddingTop},
+            baseLineHeight: baseLineHeight, basePadding: currentPadding, element: element};
+          state.layoutReservations.set(element, reservation);
+        }
+        const extra = metrics.labelHeight + metrics.gap;
+        const requiredLineHeight = Math.max(reservation.baseLineHeight, metrics.rangeHeight + extra);
+        const requiredPadding = reservation.basePadding + extra;
+        const lineValue = requiredLineHeight + "px";
+        const paddingValue = requiredPadding + "px";
+        const beforeHeight = element.getBoundingClientRect().height;
+        let changedElement = false;
+        reservation.required = {rangeHeight: metrics.rangeHeight, labelHeight: metrics.labelHeight,
+          gap: metrics.gap, lineHeight: lineValue, paddingTop: paddingValue};
+        if (element.style.getPropertyValue("line-height") !== lineValue) {
+          writeReservationStyle(element, reservation, "line-height", lineValue);
+          changedElement = true;
+        } else if (!reservation.applied["line-height"]) {
+          reservation.applied["line-height"] = inlineDeclaration(element, "line-height");
+        }
+        if (element.style.getPropertyValue("padding-top") !== paddingValue) {
+          writeReservationStyle(element, reservation, "padding-top", paddingValue);
+          changedElement = true;
+        } else if (!reservation.applied["padding-top"]) {
+          reservation.applied["padding-top"] = inlineDeclaration(element, "padding-top");
+        }
+        if (changedElement) {
+          const actualGrowth = element.getBoundingClientRect().height - beforeHeight;
+          const expectedGrowth = extra * transformScale(element).y;
+          if (actualGrowth + 0.5 < expectedGrowth) {
+            restoreReservation(element, reservation);
+            state.layoutReservations.delete(element);
+            noteReservation({element: element, status: "excluded", reason: "fixed-size"});
+            continue;
+          }
+          changed = true;
+        }
+        const computed = getComputedStyle(element);
+        noteReservation({element: element, status: "reserved", reason: "",
+          baseline: reservation.baseline,
+          applied: {lineHeight: element.style.getPropertyValue("line-height"),
+            paddingTop: element.style.getPropertyValue("padding-top")},
+          required: reservation.required,
+          computed: {lineHeight: computed.lineHeight, paddingTop: computed.paddingTop,
+            width: computed.width}});
+      }
+      return changed;
+    }
+
     function removeLabels() {
       if (state.layer) state.layer.replaceChildren();
       state.labelElements.clear();
@@ -628,8 +867,13 @@
       layer.replaceChildren();
       state.labelElements.clear();
       state.layoutRejections = [];
+      state.layoutExclusions = new WeakMap();
       state.textRectSources = new WeakMap();
       for (const record of state.records.values()) record.labels = [];
+      if (prepareLayoutReservations(layer, viewport)) {
+        scheduleLayout();
+        return 0;
+      }
       const occupancyByRoot = new Map();
       const labelRects = [];
       let painted = 0;
@@ -638,6 +882,7 @@
         if (!record.segments || !record.segments.length || !record.node.isConnected
             || record.node.data.slice(record.offset, record.offset + record.text.length) !== record.text
             || blocked(record.node) || !elementVisible(record.node.parentElement)) continue;
+        if (state.layoutExclusions.has(record.parent)) continue;
         const hostBox = record.node.parentElement.getBoundingClientRect();
         if (hostBox.right < viewport.left - VIEWPORT_MARGIN || hostBox.left > viewport.right + VIEWPORT_MARGIN
             || hostBox.bottom < viewport.top - VIEWPORT_MARGIN || hostBox.top > viewport.bottom + VIEWPORT_MARGIN) continue;
@@ -681,19 +926,7 @@
           const baseText = record.text.slice(segment[0], segment[1]);
           const metrics = labelMetrics(segment[2], baseText, font, base, transformScale(record.node.parentElement));
           const gap = Math.max(1, font.fontSize * 0.16);
-          const label = document.createElement("span");
-          label.setAttribute("data-furihook-owned", "1");
-          label.setAttribute("data-furihook-reading", segment[2]);
-          label.textContent = segment[2];
-          label.style.cssText = "all:initial!important;position:absolute!important;display:block!important;box-sizing:content-box!important;white-space:nowrap!important;pointer-events:none!important;user-select:none!important;-webkit-user-select:none!important;line-height:1!important;margin:0!important;padding:0!important;border:0!important;text-align:center!important;transform:translateX(-50%) scale(" + metrics.scaleX + "," + metrics.scaleY + ")!important;transform-origin:top center!important;";
-          label.style.setProperty("left", ((base.left + base.right) / 2) + "px", "important");
-          label.style.setProperty("top", (base.top - metrics.height - gap) + "px", "important");
-          label.style.setProperty("font-style", font.fontStyle, "important");
-          label.style.setProperty("font-weight", font.fontWeight, "important");
-          label.style.setProperty("font-size", font.fontSize + "px", "important");
-          label.style.setProperty("font-family", font.fontFamily, "important");
-          label.style.setProperty("font-stretch", font.fontStretch, "important");
-          label.style.setProperty("color", font.color, "important");
+          const label = makeLabel(segment, base, font, metrics, base.top - metrics.height - gap, false);
           layer.appendChild(label);
           const labelRect = rectObject(label.getBoundingClientRect());
           if (isClipped(labelRect, clip) || isClipped(labelRect, viewport)) {
@@ -893,6 +1126,17 @@
         skippedOccludedCount: state.stats.skippedOccludedCount, skippedGeometryCount: state.stats.skippedGeometryCount,
         staleResultCount: state.stats.staleResultCount, layoutPasses: state.stats.layoutPasses,
         rejections: includeDiagnostics ? state.layoutRejections.map(inspectRejection) : [],
+        layoutReservations: includeDiagnostics ? state.reservationDiagnostics.map(item => ({
+          elementId: item.element ? item.element.id || "" : "",
+          nodeId: item.element ? nodeId(item.element) : 0,
+          tag: item.element ? item.element.tagName : "",
+          status: item.status, reason: item.reason || "",
+          baseline: item.baseline || null,
+          applied: item.applied && item.applied.lineHeight !== undefined
+            ? {lineHeight: item.applied.lineHeight, paddingTop: item.applied.paddingTop} : null,
+          required: item.required || null,
+          computed: item.computed || null
+        })) : [],
         devicePixelRatio: window.devicePixelRatio || 1,
         visualViewport: {offsetLeft: viewport.left, offsetTop: viewport.top, width: viewport.width,
           height: viewport.height, scale: viewport.scale},
@@ -917,6 +1161,8 @@
       document.removeEventListener("transitionrun", state.scheduleLayout, true);
       document.removeEventListener("animationstart", state.scheduleLayout, true);
       if (document.fonts) document.fonts.removeEventListener("loadingdone", state.scheduleLayout);
+      for (const [element, reservation] of state.layoutReservations) restoreReservation(element, reservation);
+      state.layoutReservations.clear();
       if (state.overlay) state.overlay.remove();
       state.records.clear();
       state.nodes.clear();

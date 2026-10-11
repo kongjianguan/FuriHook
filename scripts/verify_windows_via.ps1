@@ -10,7 +10,11 @@ $adb = Join-Path $Sdk 'platform-tools\adb.exe'
 $outputDirectory = Join-Path $Workspace 'results\via'
 $fixtureDirectory = Join-Path $Workspace 'host-compatibility'
 $url = 'http://127.0.0.1:18765/via-ruby.html'
-if ($Diagnostic) { $url += '?diagnostic=1' }
+$pageUri = [UriBuilder]$url
+$queryFields = @("run=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())")
+if ($Diagnostic) { $queryFields += 'diagnostic=1' }
+$pageUri.Query = $queryFields -join '&'
+$url = $pageUri.Uri.AbsoluteUri
 New-Item -ItemType Directory -Force $outputDirectory | Out-Null
 foreach ($fixture in @(
     'via-ruby.html',
@@ -72,8 +76,9 @@ function Wait-PageReport {
 }
 
 function Tap-VisibleText {
-    param([xml]$Document, [string]$Text)
-    $node = $Document.SelectSingleNode("//node[@text='$Text' or @content-desc='$Text']")
+    param([string]$Text)
+    $document = Save-PageDump 'tap-current'
+    $node = $document.SelectSingleNode("//node[@text='$Text' or @content-desc='$Text']")
     if (-not $node) { throw "UIAutomator 没有找到可触摸文本：$Text" }
     $bounds = [regex]::Match($node.GetAttribute('bounds'), '^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$')
     if (-not $bounds.Success) { throw "UIAutomator 文本范围无效：$Text" }
@@ -97,21 +102,29 @@ try {
     Invoke-Device @('shell', 'logcat', '-c') | Out-Null
 
     $launch = Invoke-Device @('shell', 'am', 'start', '-W', '-a', 'android.intent.action.VIEW',
-        '-n', 'mark.via.gp/mark.via.Trampoline', '-d', $url)
+        '-n', 'mark.via.gp/mark.via.Trampoline', '-d', "'$url'")
     if (-not (($launch -join "`n").Contains('Status: ok'))) { throw 'Via 浏览器没有打开测试页面' }
 
     if ($Diagnostic) {
-        $diagnostic = Wait-PageReport 'layout-diagnostic' {
+        $layoutSnapshot = Wait-PageReport 'layout-diagnostic' {
             param($report) $report.phase -eq 'diagnostic-ready'
         }
-        $diagnostic.Report | ConvertTo-Json -Depth 40 |
+        $layoutSnapshot.Report | ConvertTo-Json -Depth 40 |
             Set-Content (Join-Path $outputDirectory 'via-layout-diagnostic.json') -Encoding utf8
-        if ($diagnostic.Report.initialOriginal.characters.Count -eq 0 -or
-            $diagnostic.Report.initialInspection.generation -lt 0 -or
-            $diagnostic.Report.reactOriginalGeometry.characters.Count -eq 0) {
+        if ($layoutSnapshot.Report.initialOriginal.characters.Count -eq 0 -or
+            $layoutSnapshot.Report.initialInspection.generation -lt 0 -or
+            $layoutSnapshot.Report.reactOriginalGeometry.characters.Count -eq 0) {
             throw 'Via 实际布局诊断没有包含原文 Range、React 原文 Range 或生产 inspect 数据'
         }
-        $diagnostic.Report | ConvertTo-Json -Depth 40
+        [ordered]@{
+            timestamp = $layoutSnapshot.Report.capturedAt
+            targetPackage = 'mark.via.gp'
+            originalSegmentCount = $layoutSnapshot.Report.initialOriginal.productionSegments.Count
+            reactSegmentCount = $layoutSnapshot.Report.reactOriginalGeometry.productionSegments.Count
+            originalAnnotationCount = $layoutSnapshot.Report.initialInspection.annotationCount
+            reactAnnotationCount = $layoutSnapshot.Report.reactOriginalInspection.annotationCount
+            evidencePath = Join-Path $outputDirectory 'via-layout-diagnostic.json'
+        } | ConvertTo-Json
         return
     }
 
@@ -126,21 +139,20 @@ try {
         throw '输入框、可编辑区域或原有 Ruby 排除检查失败'
     }
 
-    Tap-VisibleText $initial.Document '显示日语原文'
+    Tap-VisibleText '显示日语原文'
     $reactOriginal = Wait-PageReport 'react-original' { param($report) $report.reactOriginalUpdated }
-    Tap-VisibleText $reactOriginal.Document '显示中文译文'
+    Tap-VisibleText '显示中文译文'
     $reactTranslation = Wait-PageReport 'react-translation' { param($report) $report.reactTranslationOnly }
-    Tap-VisibleText $reactTranslation.Document '更新 React 列表'
+    Tap-VisibleText '更新 React 列表'
     $reactList = Wait-PageReport 'react-list' { param($report) $report.reactListUpdated }
 
-    Tap-VisibleText $initial.Document '生成动态 Ruby 注音'
+    Tap-VisibleText '生成动态 Ruby 注音'
     $updated = Wait-PageReport 'updated' { param($report) $report.updateRequested -and $report.updatedRubyMatch }
     foreach ($pair in @('明日:あした', '図書館:としょかん', '行:い')) {
         if ($pair -notin $updated.Report.updatedRubies) { throw "触摸更新后的 Ruby 缺少范围：$pair" }
     }
 
-    $linkDump = Save-PageDump 'link-before'
-    Tap-VisibleText $linkDump 'Open link'
+    Tap-VisibleText 'Open link'
     $linked = Wait-PageReport 'linked' { param($report) $report.linkClickCount -eq 1 }
     Save-PageDump 'final' | Out-Null
     $logs = Invoke-Device @('logcat', '-d', '-v', 'raw', '-s', 'FuriHook:I')

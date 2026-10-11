@@ -76,6 +76,14 @@ public final class RubyWebViewHookE2ETest {
                             + " && " + hostHasAnnotationCondition(ORIGINAL, "今日"));
 
             JSONObject initial = inspect(scenario);
+            JSONObject reactTranslationLayout = elementLayout(scenario, "react-current");
+            awaitJavascript(scenario,
+                    "(function(){window.__e2eEditableNode=document.getElementById('editable').firstChild;return true})()");
+            JSONObject initialPage = pageSnapshot(scenario);
+            assertEquals("宿主初始 contenteditable 文本应保持fixture实际值",
+                    "今日は学校。", initialPage.getString("editableText"));
+            assertFalse("contenteditable 初始文本不得接受注音",
+                    hostTextHasRuby(scenario, "editable"));
             JSONArray plainAnnotations = annotationsForText(initial, ORIGINAL);
             assertMatchesProductionEngine(ORIGINAL, plainAnnotations);
             JSONObject staticDom = pageSnapshot(scenario);
@@ -117,8 +125,28 @@ public final class RubyWebViewHookE2ETest {
             JSONArray reactAnnotations = annotationsForText(inspect(scenario), REACT_ORIGINAL);
             assertMatchesProductionEngine(REACT_ORIGINAL, reactAnnotations);
             assertClearLayout(reactAnnotations);
+            JSONObject reactOriginalLayout = elementLayout(scenario, "react-current");
+            assertEquals("Ruby 预留空间不得改变宿主段落宽度",
+                    reactTranslationLayout.getDouble("width"), reactOriginalLayout.getDouble("width"), 0.01);
+            assertEquals("Ruby 预留空间不得改变宿主字距",
+                    reactTranslationLayout.getString("letterSpacing"),
+                    reactOriginalLayout.getString("letterSpacing"));
+            JSONObject originalReservation = reservationFor(inspectDetailed(scenario), "react-current");
+            assertReservedSpace(originalReservation);
             JSONObject pixelEvidence = captureRubyPixels(scenario, reactAnnotations,
                     inspect(scenario).getDouble("devicePixelRatio"));
+
+            awaitJavascript(scenario,
+                    "(function(){var style=document.createElement('style');style.id='host-css-update';"
+                            + "style.textContent='#react-current.e2e-host-style{font-size:23px;"
+                            + "color:rgb(12,34,56);letter-spacing:1.25px}';document.head.appendChild(style);"
+                            + "document.getElementById('react-current').classList.add('e2e-host-style');return true})()");
+            JSONObject hostCssJapaneseLayout = elementLayout(scenario, "react-current");
+            assertEquals("23px", hostCssJapaneseLayout.getString("fontSize"));
+            assertEquals("rgb(12, 34, 56)", hostCssJapaneseLayout.getString("color"));
+            assertEquals("1.25px", hostCssJapaneseLayout.getString("letterSpacing"));
+            assertEquals(reactTranslationLayout.getDouble("width"),
+                    hostCssJapaneseLayout.getDouble("width"), 0.01);
 
             setReactMode(scenario, "translation");
             awaitJavascriptCondition(scenario,
@@ -135,6 +163,45 @@ public final class RubyWebViewHookE2ETest {
             assertEquals(REACT_TRANSLATION, translatedAgain.getString("postNodeData"));
             assertFalse("中文译文更新后不得留下日语注音", containsAnnotationForText(
                     inspect(scenario), REACT_TRANSLATION));
+            JSONObject translatedLayout = elementLayout(scenario, "react-current");
+            assertEquals("译文提交后必须恢复宿主原有顶部间距",
+                    reactTranslationLayout.getString("paddingTop"), translatedLayout.getString("paddingTop"));
+            assertEquals("译文提交后必须恢复宿主原有行高",
+                    reactTranslationLayout.getString("lineHeight"), translatedLayout.getString("lineHeight"));
+            assertEquals("1.25px", translatedLayout.getString("letterSpacing"));
+            assertEquals("23px", translatedLayout.getString("fontSize"));
+            assertEquals("rgb(12, 34, 56)", translatedLayout.getString("color"));
+            JSONObject restoredReservation = reservationFor(inspectDetailed(scenario), "react-current");
+            assertTrue("inspect(true) 必须记录宿主样式恢复结果",
+                    restoredReservation != null && "restored".equals(restoredReservation.getString("status")));
+
+            String protectedText = "日本語学校。";
+            awaitJavascript(scenario,
+                    "(function(){var t='" + protectedText + "',fixed=document.createElement('p');"
+                            + "fixed.id='fixed-japanese';fixed.textContent=t;fixed.style.cssText='position:fixed;"
+                            + "right:12px;bottom:12px;z-index:10;margin:0;padding:0;font:20px sans-serif';"
+                            + "var control=document.createElement('button');control.id='japanese-control';"
+                            + "control.textContent=t;document.body.append(fixed,control);window.protectedStyles={"
+                            + "fixed:fixed.getAttribute('style'),control:control.getAttribute('style'),"
+                            + "fixedPosition:getComputedStyle(fixed).position,controlDisplay:getComputedStyle(control).display};return true})()");
+            awaitJavascriptCondition(scenario,
+                    "JSON.parse(window.FuriHook102.inspect(true)).layoutReservations.some(function(item){"
+                            + "return item.elementId==='fixed-japanese'&&item.status==='excluded'})");
+            JSONObject protectedInspection = inspect(scenario);
+            assertFalse("固定正文和交互控件不得显示 Ruby",
+                    containsAnnotationForText(protectedInspection, protectedText));
+            JSONObject protectedStylesAfter = new JSONObject(awaitJavascript(scenario,
+                    "(function(){var f=document.getElementById('fixed-japanese'),c=document.getElementById('japanese-control');"
+                            + "return JSON.stringify({fixed:f.getAttribute('style'),control:c.getAttribute('style'),"
+                            + "fixedPosition:getComputedStyle(f).position,controlDisplay:getComputedStyle(c).display})})()"));
+            JSONObject protectedStyleBaseline = new JSONObject(awaitJavascript(scenario,
+                    "JSON.stringify(window.protectedStyles)"));
+            assertEquals(protectedStyleBaseline.getString("fixed"), protectedStylesAfter.getString("fixed"));
+            assertEquals(protectedStyleBaseline.getString("control"), protectedStylesAfter.getString("control"));
+            assertEquals(protectedStyleBaseline.getString("fixedPosition"),
+                    protectedStylesAfter.getString("fixedPosition"));
+            assertEquals(protectedStyleBaseline.getString("controlDisplay"),
+                    protectedStylesAfter.getString("controlDisplay"));
 
             String beforeMutationId = awaitJavascript(scenario,
                     "String(window.reactFixture.inspect().schoolNodeIdentityPreserved)");
@@ -194,13 +261,22 @@ public final class RubyWebViewHookE2ETest {
             assertMatchesProductionEngine(UPDATED,
                     annotationsForText(afterDynamicInspection, UPDATED));
 
+            awaitJavascript(scenario,
+                    "(function(){var e=document.getElementById('editable');e.firstChild.data='編集可能な漢字';return true})()");
+            awaitJavascriptCondition(scenario,
+                    "document.getElementById('editable').textContent==='編集可能な漢字'"
+                            + "&&document.getElementById('editable').firstChild===window.__e2eEditableNode");
             JSONObject excluded = pageSnapshot(scenario);
             assertEquals("編集可能な漢字", excluded.getString("editableText"));
+            assertTrue("宿主更新 contenteditable 文本时，Hook 必须保留同一个 Text 节点",
+                    excluded.getBoolean("editableNodeIdentityPreserved"));
             assertEquals("password", excluded.getString("passwordType"));
             assertEquals(ORIGINAL, excluded.getString("passwordValue"));
             JSONObject afterExcluded = inspect(scenario);
             assertFalse("contenteditable 内部不得接受注音记录",
                     containsAnnotationForText(afterExcluded, "編集可能な漢字"));
+            assertFalse("宿主更新的 contenteditable 节点仍不得接受注音",
+                    hostTextHasRuby(scenario, "editable"));
             assertEquals(1, excluded.getInt("fixtureRubyCount"));
             assertEquals("かん", excluded.getString("fixtureOriginalReading"));
 
@@ -357,6 +433,14 @@ public final class RubyWebViewHookE2ETest {
             evidence.put("translationTextUpdatedBack", translatedAgain.getString("postNodeData"));
             evidence.put("reactOriginalTextNodePreserved", reactOriginal.getBoolean("postNodeIdentityPreserved"));
             evidence.put("reactOriginalSegments", annotationEvidence(reactAnnotations));
+            evidence.put("reactTranslationLayout", reactTranslationLayout);
+            evidence.put("reactOriginalLayout", reactOriginalLayout);
+            evidence.put("reactOriginalReservation", originalReservation);
+            evidence.put("reactHostCssJapaneseLayout", hostCssJapaneseLayout);
+            evidence.put("reactTranslatedLayoutAfterRestoration", translatedLayout);
+            evidence.put("reactRestoredReservation", restoredReservation);
+            evidence.put("fixedAndControlText", protectedText);
+            evidence.put("fixedReservation", reservationFor(inspectDetailed(scenario), "fixed-japanese"));
             evidence.put("reactListStableNode", afterList.getBoolean("schoolNodeIdentityPreserved"));
             evidence.put("reactListRemovedNodeDisconnected", afterList.getBoolean("removedRowDisconnected"));
             evidence.put("reactListSegments", annotationEvidence(annotationsForText(
@@ -365,6 +449,9 @@ public final class RubyWebViewHookE2ETest {
                     afterListInspection, REACT_INSERTED_ROW)));
             evidence.put("rubyLayoutPixels", pixelEvidence);
             evidence.put("staticBodyTextNodePreserved", staticDom.getBoolean("plainNodeIdentityPreserved"));
+            evidence.put("editableInitialText", initialPage.getString("editableText"));
+            evidence.put("editableHostUpdatedText", excluded.getString("editableText"));
+            evidence.put("editableHostTextNodePreserved", excluded.getBoolean("editableNodeIdentityPreserved"));
             evidence.put("linkClickPreserved", "clicked".equals(linkClickResult));
             evidence.put("clipboardText", copied.toString());
             evidence.put("longNodePrefixLength", longCreated.getInt("prefixLength"));
@@ -392,6 +479,59 @@ public final class RubyWebViewHookE2ETest {
             throws Exception {
         return new JSONObject(awaitJavascript(scenario,
                 "JSON.parse(window.FuriHook102.inspect())"));
+    }
+
+    private static JSONObject inspectDetailed(ActivityScenario<WebViewRubyFixtureActivity> scenario)
+            throws Exception {
+        return new JSONObject(awaitJavascript(scenario,
+                "JSON.parse(window.FuriHook102.inspect(true))"));
+    }
+
+    private static JSONObject elementLayout(ActivityScenario<WebViewRubyFixtureActivity> scenario,
+                                            String elementId) throws Exception {
+        return new JSONObject(awaitJavascript(scenario,
+                "(function(){var e=document.getElementById('" + elementId + "'),s=getComputedStyle(e),r=e.getBoundingClientRect();"
+                        + "return JSON.stringify({width:r.width,letterSpacing:s.letterSpacing,fontSize:s.fontSize,color:s.color,"
+                        + "lineHeight:s.lineHeight,paddingTop:s.paddingTop,display:s.display,position:s.position})})()"));
+    }
+
+    private static boolean hostTextHasRuby(ActivityScenario<WebViewRubyFixtureActivity> scenario,
+                                           String elementId) throws Exception {
+        return Boolean.parseBoolean(awaitJavascript(scenario,
+                "(function(){var n=document.getElementById('" + elementId + "').firstChild;"
+                        + "return Array.from(window.FuriHook102.records.values()).some(function(record){"
+                        + "return record.node===n&&Array.isArray(record.segments)&&record.segments.length>0})})()"));
+    }
+
+    private static JSONObject reservationFor(JSONObject inspection, String elementId)
+            throws JSONException {
+        JSONArray reservations = inspection.getJSONArray("layoutReservations");
+        JSONObject latest = null;
+        for (int index = 0; index < reservations.length(); index++) {
+            JSONObject reservation = reservations.getJSONObject(index);
+            if (elementId.equals(reservation.optString("elementId"))) latest = reservation;
+        }
+        return latest;
+    }
+
+    private static void assertReservedSpace(JSONObject reservation) throws JSONException {
+        assertTrue("inspect(true) 必须报告已实施的 Ruby 布局预留",
+                reservation != null && "reserved".equals(reservation.getString("status")));
+        JSONObject baseline = reservation.getJSONObject("baseline");
+        JSONObject applied = reservation.getJSONObject("applied");
+        double baselinePadding = parseCssPixels(baseline.getString("paddingTop"));
+        double appliedPadding = parseCssPixels(applied.getString("paddingTop"));
+        double baselineLineHeight = parseCssPixels(baseline.getString("lineHeight"));
+        double appliedLineHeight = parseCssPixels(applied.getString("lineHeight"));
+        assertTrue("日语正文必须增加顶部空间或行高",
+                appliedPadding > baselinePadding
+                        || (Double.isFinite(baselineLineHeight) && Double.isFinite(appliedLineHeight)
+                        && appliedLineHeight > baselineLineHeight));
+    }
+
+    private static double parseCssPixels(String value) {
+        if (!value.endsWith("px")) return Double.NaN;
+        return Double.parseDouble(value.substring(0, value.length() - 2));
     }
 
     private static JSONArray annotationsForText(JSONObject inspection, String text)
@@ -718,7 +858,8 @@ public final class RubyWebViewHookE2ETest {
                         + "plainNodeIdentityPreserved:f.plainNode===p.firstChild&&p.childNodes.length===1&&f.plainNode.parentNode===p,"
                         + "dynamicText:d.textContent,"
                         + "dynamicNodeIdentityPreserved:f.dynamicNode===d.firstChild&&d.childNodes.length===1&&f.dynamicNode.parentNode===d,"
-                        + "editableText:e.textContent,passwordType:document.getElementById('password').type,"
+                        + "editableText:e.textContent,editableNodeIdentityPreserved:e.firstChild===window.__e2eEditableNode,"
+                        + "passwordType:document.getElementById('password').type,"
                         + "passwordValue:document.getElementById('password').value,"
                         + "linkText:document.getElementById('link').textContent,"
                         + "linkHref:document.getElementById('link').getAttribute('href'),"

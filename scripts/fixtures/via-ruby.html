@@ -187,6 +187,10 @@
                 baseText: node.data.slice(start, end), reading: segment[2],
                 baseRect: rectData(base), baseRects: Array.from(range.getClientRects(), rectData),
                 rubySize, acceptedReadingFont, acceptedBaseFont, scaleX,
+                baseFontAscent: baseMetrics.fontBoundingBoxAscent,
+                baseFontDescent: baseMetrics.fontBoundingBoxDescent,
+                baseInkAscent: baseMetrics.actualBoundingBoxAscent,
+                baseInkDescent: baseMetrics.actualBoundingBoxDescent,
                 readingInkAscent: readingMetrics.actualBoundingBoxAscent,
                 readingInkDescent: readingMetrics.actualBoundingBoxDescent,
                 candidateReadingArea: candidate, candidateAreaHitStack: hitStack(candidate)});
@@ -226,10 +230,17 @@
             candidateReadingArea: probe, candidateAreaHitStack: hitStack(probe),
             font: style, clipAncestors});
         }
+        const baselineProbe = document.createElement("span");
+        baselineProbe.setAttribute("data-furihook-owned", "1");
+        baselineProbe.style.cssText = "all:initial!important;display:inline-block!important;width:0!important;height:0!important;padding:0!important;border:0!important;margin:0!important;vertical-align:baseline!important;";
+        element.appendChild(baselineProbe);
+        const measuredBaseline = baselineProbe.getBoundingClientRect().top;
+        baselineProbe.remove();
         return {text: source, nodeLengthUtf16: source.length,
           nodeIdentity: node === element.firstChild && node.parentNode === element,
           parentTag: element.tagName, parentId: element.id, elementStyle: style,
-          range: rectData(element.getBoundingClientRect()), characters, productionSegments: segments};
+          range: rectData(element.getBoundingClientRect()), measuredBaseline,
+          characters, productionSegments: segments};
       }
 
       function neighboringRanges(element) {
@@ -285,12 +296,17 @@
         requestAnimationFrame(() => {
           const react = window.reactFixture.inspect();
           const inspection = hookInspection();
+          const reactElement = document.getElementById("react-current");
+          const reactRecord = window.__FuriHook102 &&
+            Array.from(window.__FuriHook102.records.values()).find(record =>
+              record.node === reactElement?.firstChild && record.text === react.postText);
           if (react.mode !== "original" || !inspection?.scan?.initialDone
-              || inspection.scan.awaitingReadings !== 0 || inspection.scan.pendingBatches !== 0) {
+              || inspection.scan.awaitingReadings !== 0 || inspection.scan.pendingBatches !== 0
+              || inspection.scan.dirtyRoots !== 0 || inspection.scan.dirtyNodes !== 0
+              || inspection.scan.dirtyWalker || !reactRecord?.segments?.length) {
             waitForReactLayout(initialOriginal, initialNeighbors, initialInspection, initialReact);
             return;
           }
-          const reactElement = document.getElementById("react-current");
           const reactGeometry = characterGeometry(reactElement);
           const annotations = inspection.annotations.filter((item) =>
             item.nodeId === inspection.hostNodes.find((node) =>

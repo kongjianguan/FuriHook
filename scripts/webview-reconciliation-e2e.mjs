@@ -74,6 +74,30 @@ try {
       return JSON.parse(window.FuriHook102.inspect());
     });
   }
+  async function inspectDetailed() {
+    return page.evaluate(() => JSON.parse(window.FuriHook102.inspect(true)));
+  }
+  async function layoutSnapshot(selector) {
+    return page.locator(selector).evaluate(element => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return {width: rect.width, letterSpacing: style.letterSpacing, fontSize: style.fontSize,
+        color: style.color, lineHeight: style.lineHeight, paddingTop: style.paddingTop,
+        display: style.display, position: style.position};
+    });
+  }
+  function reservationFor(inspection, elementId) {
+    return inspection.layoutReservations.findLast(item => item.elementId === elementId);
+  }
+  function assertReservedSpace(reservation, elementId) {
+    assert.ok(reservation, `inspect(true) must expose layout reservation for #${elementId}`);
+    assert.equal(reservation.status, 'reserved', JSON.stringify(reservation));
+    const baseline = reservation.baseline;
+    const applied = reservation.applied;
+    assert.ok(Number.parseFloat(applied.paddingTop) > Number.parseFloat(baseline.paddingTop)
+      || Number.parseFloat(applied.lineHeight) > Number.parseFloat(baseline.lineHeight),
+    `Japanese readings must reserve real host line space: ${JSON.stringify(reservation)}`);
+  }
   async function waitFor(predicate, message, timeout = 20000, argument = null) {
     await page.waitForFunction(predicate, argument, { timeout, polling: 40 }).catch(async error => {
       throw new Error(`${message}; last inspection: ${JSON.stringify(await inspect())}`, { cause: error });
@@ -91,7 +115,7 @@ try {
       text,
       expected,
       actual,
-      inspection: await inspect(),
+      inspection: await inspectDetailed(),
       react: await page.evaluate(() => window.reactFixture ? window.reactFixture.inspect() : null)
     };
     segmentCheckNumber++;
@@ -134,6 +158,26 @@ try {
     && JSON.parse(window.FuriHook102.inspect()).scan.initialDone, 'Fixture initialization');
   await settle();
   const translationSnapshot = await page.evaluate(() => window.reactFixture.inspect());
+  const reactTranslationLayout = await layoutSnapshot('#react-current');
+  const editableInitial = await page.evaluate(() => {
+    const node = document.getElementById('editable').firstChild;
+    window.__e2eEditableNode = node;
+    return {text: node.data, sameNode: node === document.getElementById('editable').firstChild,
+      hasRuby: [...window.__FuriHook102.records.values()].some(record => record.node === node
+        && Array.isArray(record.segments) && record.segments.length > 0)};
+  });
+  assert.deepEqual(editableInitial, {text: '今日は学校。', sameNode: true, hasRuby: false});
+  await page.evaluate(() => { window.__e2eEditableNode.data = '編集可能な漢字'; });
+  await settle();
+  const editableAfterHostUpdate = await page.evaluate(() => ({
+    text: document.getElementById('editable').textContent,
+    sameNode: window.__e2eEditableNode === document.getElementById('editable').firstChild,
+    hasRuby: [...window.__FuriHook102.records.values()].some(record => record.node === window.__e2eEditableNode
+      && Array.isArray(record.segments) && record.segments.length > 0)
+  }));
+  assert.deepEqual(editableAfterHostUpdate,
+    {text: '編集可能な漢字', sameNode: true, hasRuby: false},
+    'The host must keep its own contenteditable update and the renderer must leave the same Text node alone');
   assert.equal(translationSnapshot.reactProduction, true);
   assert.equal(translationSnapshot.postText, reactTranslation);
   assert.equal(translationSnapshot.postNodeIdentityPreserved, true);
@@ -152,6 +196,13 @@ try {
   assert.equal(originalSnapshot.postNodeIdentityPreserved, true);
   assert.equal(originalSnapshot.postNodeParentPreserved, true);
   const originalAnnotations = annotationsFor(await inspect(), reactOriginal);
+  const originalLayout = await layoutSnapshot('#react-current');
+  const originalReservation = reservationFor(await inspectDetailed(), 'react-current');
+  assertReservedSpace(originalReservation, 'react-current');
+  assert.equal(originalLayout.width, reactTranslationLayout.width,
+    'Ruby reservation must preserve the host block width');
+  assert.equal(originalLayout.letterSpacing, reactTranslationLayout.letterSpacing,
+    'Ruby reservation must preserve host letter spacing');
   await checkProductionSegments(reactOriginal, originalAnnotations);
   assertGeometry(originalAnnotations);
   const originalHostText = await page.locator('#react-current').evaluate(node => ({
@@ -161,6 +212,20 @@ try {
     ownedDescendants: node.querySelectorAll('[data-furihook-owned="1"]').length
   }));
   assert.deepEqual(originalHostText, { data: reactOriginal, childCount: 1, directParent: true, ownedDescendants: 0 });
+
+  await page.evaluate(() => {
+    const style = document.createElement('style');
+    style.id = 'host-css-update';
+    style.textContent = '#react-current.e2e-host-style { font-size: 23px; color: rgb(12, 34, 56); letter-spacing: 1.25px; }';
+    document.head.appendChild(style);
+    document.getElementById('react-current').classList.add('e2e-host-style');
+  });
+  await settle();
+  const hostCssJapaneseLayout = await layoutSnapshot('#react-current');
+  assert.equal(hostCssJapaneseLayout.fontSize, '23px');
+  assert.equal(hostCssJapaneseLayout.color, 'rgb(12, 34, 56)');
+  assert.equal(hostCssJapaneseLayout.letterSpacing, '1.25px');
+  assert.equal(hostCssJapaneseLayout.width, reactTranslationLayout.width);
 
   await page.evaluate(() => window.reactFixture.setMode('translation'));
   await waitFor(() => window.reactFixture.inspect().mode === 'translation'
@@ -172,6 +237,50 @@ try {
   assert.equal(translatedAgain.postNodeParentPreserved, true);
   assert.equal(translatedAgain.postNodeData, reactTranslation);
   assert.equal(annotationsFor(await inspect(), reactTranslation).length, 0);
+  const translatedLayout = await layoutSnapshot('#react-current');
+  assert.equal(translatedLayout.paddingTop, reactTranslationLayout.paddingTop,
+    'Returning to Chinese must restore the host padding');
+  assert.equal(translatedLayout.lineHeight, reactTranslationLayout.lineHeight,
+    'Returning to Chinese must restore the host line height');
+  assert.equal(translatedLayout.width, reactTranslationLayout.width);
+  assert.equal(translatedLayout.letterSpacing, '1.25px',
+    'Restoration must preserve the host CSS update');
+  assert.equal(translatedLayout.fontSize, '23px');
+  assert.equal(translatedLayout.color, 'rgb(12, 34, 56)');
+  const restoredReservation = reservationFor(await inspectDetailed(), 'react-current');
+  assert.ok(restoredReservation, 'inspect(true) must retain the restoration result');
+  assert.equal(restoredReservation.status, 'restored', JSON.stringify(restoredReservation));
+
+  const protectedText = '日本語学校。';
+  await page.evaluate(text => {
+    const fixed = document.createElement('p');
+    fixed.id = 'fixed-japanese';
+    fixed.textContent = text;
+    fixed.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:10;margin:0;padding:0;font:20px sans-serif;';
+    const control = document.createElement('button');
+    control.id = 'japanese-control';
+    control.textContent = text;
+    document.body.append(fixed, control);
+    window.__protectedStyleBaseline = {
+      fixed: fixed.getAttribute('style'), control: control.getAttribute('style'),
+      fixedPosition: getComputedStyle(fixed).position, controlDisplay: getComputedStyle(control).display
+    };
+  }, protectedText);
+  await settle();
+  const protectedInspection = await inspect();
+  assert.equal(annotationsFor(protectedInspection, protectedText).length, 0,
+    'Fixed text and interactive controls must not receive Ruby');
+  assert.deepEqual(await page.evaluate(() => {
+    const fixed = document.getElementById('fixed-japanese');
+    const control = document.getElementById('japanese-control');
+    return {fixed: fixed.getAttribute('style'), control: control.getAttribute('style'),
+      fixedPosition: getComputedStyle(fixed).position, controlDisplay: getComputedStyle(control).display};
+  }), await page.evaluate(() => window.__protectedStyleBaseline),
+  'Fixed blocks and controls must keep their host styles');
+  const protectedReservations = (await inspectDetailed()).layoutReservations;
+  const fixedReservation = protectedReservations.find(item => item.elementId === 'fixed-japanese');
+  assert.ok(fixedReservation, 'inspect(true) must record why a fixed block was excluded');
+  assert.equal(fixedReservation.status, 'excluded', JSON.stringify(fixedReservation));
 
   await page.evaluate(() => window.reactFixture.reconcileList());
   await waitFor(() => window.reactFixture.inspect().schoolText === '今日は大学。'
@@ -232,7 +341,7 @@ try {
   });
   const longDiagnosticPath = path.join(outputDirectory, 'long-node-horizontal-scroll.json');
   const initialLongDiagnostic = {fullHostText: longText, analysis: longAnalysis,
-    inspection: await inspect(), react: await page.evaluate(() => window.reactFixture.inspect())};
+    inspection: await inspectDetailed(), react: await page.evaluate(() => window.reactFixture.inspect())};
   await writeFile(longDiagnosticPath, JSON.stringify(initialLongDiagnostic, null, 2) + '\n');
   assert.equal(longAnalysis.nodeData, longText);
   assert.equal(longAnalysis.connected, true);
@@ -247,7 +356,7 @@ try {
     assert.equal(normalizedLongAnalysis[index].baseText, longExpected[index].baseText);
     assert.equal(normalizedLongAnalysis[index].reading, longExpected[index].reading);
   }
-  const naturalInspection = await inspect();
+  const naturalInspection = await inspectDetailed();
   const longNodeIds = new Set(naturalInspection.hostNodes.filter(item => item.connected && item.data === longText)
     .map(item => item.nodeId));
   assert.ok(longNodeIds.size > 0, 'inspect must expose the real long host Text node');
@@ -364,7 +473,7 @@ try {
     return paragraph.scrollLeft > 0 && ranges.every(rect => rect.left >= left && rect.right <= right);
   }, 'Host horizontal scrolling did not reveal every measured Japanese segment');
   await settle();
-  const longInspection = await inspect();
+  const longInspection = await inspectDetailed();
   const longAnnotations = longInspection.annotations.filter(item => longNodeIds.has(item.nodeId));
   const longVisibleGeometry = await page.evaluate(() => ({
     nodePreserved: window.__longNode === window.__longNode.parentElement.firstChild,
@@ -435,6 +544,10 @@ try {
     paragraph.appendChild(document.createTextNode(text));
     clip.appendChild(paragraph);
     document.body.appendChild(clip);
+    const style = getComputedStyle(paragraph);
+    const rect = paragraph.getBoundingClientRect();
+    window.__insufficientBaseline = {lineHeight: style.lineHeight, paddingTop: style.paddingTop,
+      width: rect.width, letterSpacing: style.letterSpacing};
   }, insufficientText);
   await page.locator('#insufficient-overflow-clip').scrollIntoViewIfNeeded();
   await waitFor(previousSkips => {
@@ -451,6 +564,18 @@ try {
     item => insufficientNodeIds.has(item.nodeId));
   assert.equal(insufficientAnnotations.length, 0,
     'Labels that cannot fit inside the real overflow clip must not be rendered');
+  const insufficientAfter = await page.locator('#insufficient-overflow-text').evaluate(element => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return {lineHeight: style.lineHeight, paddingTop: style.paddingTop,
+      width: rect.width, letterSpacing: style.letterSpacing};
+  });
+  assert.deepEqual(insufficientAfter, await page.evaluate(() => window.__insufficientBaseline),
+    'A clipped text block must not receive layout reservations');
+  const insufficientReservation = reservationFor(await inspectDetailed(), 'insufficient-overflow-text');
+  assert.ok(insufficientReservation, 'inspect(true) must record clipped block exclusion');
+  assert.equal(insufficientReservation.status, 'unmanaged', JSON.stringify(insufficientReservation));
+  assert.equal(insufficientReservation.reason, 'ancestor-clip', JSON.stringify(insufficientReservation));
 
   const burstStart = (await inspect()).analyzedSegmentCount;
   await page.evaluate(() => {
@@ -513,7 +638,19 @@ try {
     browserVersion,
     reactVersion: translationSnapshot.reactProduction ? '18.3.1' : 'unknown',
     translationNodePreserved: translationSnapshot.postNodeIdentityPreserved,
+    editableInitial,
+    editableAfterHostUpdate,
     originalNodePreserved: originalSnapshot.postNodeIdentityPreserved,
+    reactTranslationLayout,
+    reactOriginalLayout: originalLayout,
+    reactOriginalReservation: originalReservation,
+    translatedLayoutAfterRestoration: translatedLayout,
+    restoredReservation,
+    hostCssJapaneseLayout,
+    protectedText,
+    protectedTextAnnotations: annotationsFor(protectedInspection, protectedText),
+    fixedReservation,
+    insufficientReservation,
     reactOriginalAnnotations: originalAnnotations,
     retainedListAnnotations: retainedAnnotations,
     insertedListAnnotations: insertedAnnotations,
