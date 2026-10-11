@@ -675,7 +675,7 @@
 
     function reservationBlockReason(element) {
       const style = getComputedStyle(element);
-      if (!RESERVABLE_TAGS.has(element.localName)) return "unsupported-element";
+      if (!RESERVABLE_TAGS.has(element.localName) && element.localName !== "a") return "unsupported-element";
       if (style.display !== "block" && style.display !== "flow-root" && style.display !== "list-item") return "unsupported-display";
       if (style.position !== "static" || style.float !== "none") return "complex-layout";
       if (style.writingMode !== "horizontal-tb" || style.contain !== "none"
@@ -687,6 +687,7 @@
       if (!parentStyle || parentStyle.display.includes("flex") || parentStyle.display.includes("grid")
           || parentStyle.display.includes("table") || parentStyle.columnCount !== "auto"
           || parentStyle.columnWidth !== "auto") return "complex-layout";
+      if (element.localName === "a") return "existing-space";
       if (style.overflowX !== "visible" || style.overflowY !== "visible"
           || (style.whiteSpace !== "normal" && style.whiteSpace !== "pre-wrap" && style.whiteSpace !== "pre-line")) return "existing-space";
       let ancestor = element.parentElement;
