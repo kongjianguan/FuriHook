@@ -2,6 +2,8 @@ package dev.furihook.hook;
 
 import android.content.pm.ApplicationInfo;
 
+import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -46,7 +48,10 @@ final class HookRegistry {
         try {
             TextViewAnnotator annotator = new TextViewAnnotator(log, packageName, processName, engine);
             Collections.addAll(handles, TextViewHook.register(module, annotator));
-            log.event("{\"event\":\"hook_registered\",\"methods\":[\"TextView.setText(CharSequence,BufferType)\",\"TextView.setText(char[],int,int)\"],\"api\":102}");
+            log.event("{\"event\":\"hook_registered\",\"package\":"
+                    + JSONObject.quote(packageName) + ",\"process\":"
+                    + JSONObject.quote(processName)
+                    + ",\"methods\":[\"TextView.setText(CharSequence,BufferType)\",\"TextView.setText(char[],int,int)\"],\"api\":102}");
         } catch (Throwable failure) {
             log.failure("hook_registration_failed", failure);
         }
@@ -62,7 +67,13 @@ final class HookRegistry {
         if (!allowed || composeAttempted || !param.isFirstPackage()) return;
         composeAttempted = true;
         try {
-            Collections.addAll(handles, ComposeHook.register(module, log, param.getClassLoader(), engine));
+            if ("com.twitter.android".equals(param.getPackageName())) {
+                Collections.addAll(handles, XComposeAdapter.register(module, log,
+                        param.getClassLoader(), engine));
+            } else {
+                Collections.addAll(handles, ComposeHook.register(module, log,
+                        param.getClassLoader(), engine));
+            }
         } catch (Throwable failure) {
             log.failure("compose_hook_registration_failed", failure);
         }

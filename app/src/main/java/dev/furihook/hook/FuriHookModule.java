@@ -1,5 +1,7 @@
 package dev.furihook.hook;
 
+import org.json.JSONObject;
+
 import io.github.libxposed.api.XposedModule;
 
 public final class FuriHookModule extends XposedModule {
@@ -13,7 +15,8 @@ public final class FuriHookModule extends XposedModule {
         }
         ModuleLog log = new ModuleLog(this);
         registry = new HookRegistry(this, log, param.getProcessName());
-        log.event("{\"event\":\"module_loaded\",\"api\":102}");
+        log.event("{\"event\":\"module_loaded\",\"process\":"
+                + JSONObject.quote(param.getProcessName()) + ",\"api\":102}");
     }
 
     @Override

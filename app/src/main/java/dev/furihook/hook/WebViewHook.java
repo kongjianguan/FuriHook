@@ -39,7 +39,7 @@ import dev.furihook.config.DetectionConfig;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
-/** Adds local Ruby markup to eligible Japanese text nodes in WebView documents. */
+/** Renders local readings without replacing host text nodes in WebView documents. */
 public final class WebViewHook {
     private WebViewHook() {
     }
@@ -326,6 +326,11 @@ public final class WebViewHook {
                     state.injecting = false;
                     state.polling = false;
                     main.removeCallbacks(state.contentPoll);
+                    if (BuildConfig.DETECTION_LOGS) {
+                        log.event("{\"event\":\"webview_javascript_disabled\",\"package\":\""
+                                + safeJson(packageName) + "\",\"process\":\""
+                                + safeJson(processName) + "\"}");
+                    }
                     return;
                 }
             } catch (Throwable failure) {
@@ -342,7 +347,14 @@ public final class WebViewHook {
                 view.evaluateJavascript(source, value -> {
                     if (generation != state.generation) return;
                     if ("true".equals(value)) {
+                        boolean firstInstallation = !state.installed;
                         state.installed = true;
+                        if (firstInstallation && BuildConfig.DETECTION_LOGS) {
+                            log.event("{\"event\":\"webview_script_installed\",\"package\":\""
+                                    + safeJson(packageName) + "\",\"process\":\""
+                                    + safeJson(processName) + "\",\"generation\":"
+                                    + generation + "}");
+                        }
                         pull(state);
                         if (view.getProgress() == 100) state.injecting = false;
                     }

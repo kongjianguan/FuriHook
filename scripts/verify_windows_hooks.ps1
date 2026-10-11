@@ -61,7 +61,7 @@ foreach ($event in @('webview_hooks_registered', 'webview_ruby_applied', 'compos
     if (@($adapterEvents | Where-Object event -eq $event).Count -eq 0) { throw "缺少适配器事件：$event" }
 }
 if (@($adapterEvents | Where-Object event -Match 'failed').Count -ne 0) { throw '适配器 Hook 日志报告错误' }
-foreach ($evidence in @('webview-ruby-e2e.json', 'compose-ruby-e2e.json', 'compose-simple-ruby-pixels.png')) {
+foreach ($evidence in @('webview-ruby-e2e.json', 'webview-ruby-pixel-copy.png', 'compose-ruby-e2e.json', 'compose-simple-ruby-pixels.png')) {
     Invoke-Device @('pull', "/sdcard/Android/data/dev.furihook.testapp/files/$evidence", "$outputDirectory\$evidence") | Out-Null
 }
 Invoke-Device @('shell', 'am', 'force-stop', 'dev.furihook.testapp') | Out-Null

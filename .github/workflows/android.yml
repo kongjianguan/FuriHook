@@ -23,6 +23,11 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@07d1f8453baaff67fb503883367f8b13e6158a54 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: scripts/webview-e2e/package-lock.json
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
         with:
           cmdline-tools-version: '12266719'
@@ -30,7 +35,23 @@ jobs:
       - name: Install Android SDK components
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - name: Build and run unit tests and lint
-        run: ./gradlew :app:assembleDebug :testapp:assembleDebug :testapp:assembleDebugAndroidTest :core:test :core:verifyReadingCorpus :app:lintDebug :testapp:lintDebug --stacktrace
+        run: ./gradlew :app:assembleDebug :testapp:assembleDebug :testapp:assembleDebugAndroidTest :core:test :core:verifyReadingCorpus :core:writeReadingEngineBridgeClasspath :app:lintDebug :testapp:lintDebug --stacktrace
+      - name: Install browser verification dependencies
+        working-directory: scripts/webview-e2e
+        run: npm ci
+      - name: Install Chromium and Japanese fonts
+        working-directory: scripts/webview-e2e
+        run: |
+          mkdir -p ../../work/browser-tmp
+          npx playwright install --with-deps chromium
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+        env:
+          TMPDIR: ${{ github.workspace }}/work/browser-tmp
+      - name: Verify real React updates and WebView annotation geometry
+        working-directory: scripts/webview-e2e
+        run: npm test
+        env:
+          TMPDIR: ${{ github.workspace }}/work/browser-tmp
       - name: Verify packaged Modern API metadata
         run: |
           python3 -m venv work/verification-venv
@@ -51,6 +72,7 @@ jobs:
             app/build/reports/lint-results-debug.*
             testapp/build/reports/lint-results-debug.*
             work/apk-verification/
+            work/webview-reconciliation-e2e/
           if-no-files-found: error
 
   e2e:

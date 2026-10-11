@@ -3,24 +3,45 @@
   if (window.__FuriHook102ScriptInstalled) return;
   window.__FuriHook102ScriptInstalled = true;
 
-  const VERSION = 1;
+  const VERSION = 2;
   const MAX_BATCH_NODES = 24;
   const MAX_BATCH_TEXT = 12000;
   const MAX_NODE_TEXT = 900;
   const MAX_VISITED_NODES = 320;
   const MAX_DIRTY_ROOTS = 192;
   const MAX_PENDING_BATCHES = 7;
+  const MAX_TRACKED_RECORDS = 4096;
+  const MAX_VISIBLE_ANNOTATIONS = 128;
+  const MAX_OCCUPANCY_NODES = 2048;
   const KANJI = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u{20000}-\u{2fa1d}]/u;
+  const KANA = /[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9d]/u;
   const SKIP = "script,style,noscript,template,textarea,input,select,option,button,code,pre,ruby,rt,rp";
+  const OWNED = "[data-furihook-owned='1']";
+  const XHTML = "http://www.w3.org/1999/xhtml";
+  const VIEWPORT_MARGIN = 24;
+  const measureContext = document.createElement("canvas").getContext("2d");
+
+  function rectObject(rect) {
+    return {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+      width: rect.width, height: rect.height};
+  }
+
+  function intersects(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
 
   function createState(generation) {
     const state = {
       version: VERSION,
       generation: generation,
       nextId: 1,
+      nextNodeId: 1,
       nodes: new Map(),
+      nodeIds: new WeakMap(),
+      records: new Map(),
       processed: new WeakSet(),
       offsets: new WeakMap(),
+      languageCache: new WeakMap(),
       batches: [],
       dirtyNodes: [],
       dirtyNodeSet: new Set(),
@@ -30,41 +51,207 @@
       initialWalker: null,
       initialDone: false,
       observer: null,
-      scanPending: false
+      resizeObserver: null,
+      observedElements: new Set(),
+      overlay: null,
+      layer: null,
+      shadow: null,
+      labelElements: new Map(),
+      layoutPending: false,
+      scanPending: false,
+      animationPending: false,
+      hidden: document.visibilityState === "hidden",
+      stats: {layoutPasses: 0, skippedOverlapCount: 0, skippedClippedCount: 0,
+        skippedOccludedCount: 0, skippedGeometryCount: 0, staleResultCount: 0}
     };
 
     function rootElement() {
       return document.documentElement;
     }
 
+    function ensureOverlay() {
+      if (state.overlay && state.overlay.isConnected) return state.overlay;
+      const overlay = document.createElement("div");
+      overlay.setAttribute("data-furihook-owned", "1");
+      overlay.setAttribute("aria-hidden", "true");
+      overlay.style.cssText = "all:initial!important;display:block!important;position:fixed!important;inset:0!important;overflow:hidden!important;pointer-events:none!important;z-index:2147483647!important;contain:strict!important;";
+      state.shadow = overlay.attachShadow({mode: "closed"});
+      state.layer = document.createElement("div");
+      state.layer.style.cssText = "all:initial!important;position:absolute!important;inset:0!important;overflow:hidden!important;pointer-events:none!important;";
+      state.shadow.appendChild(state.layer);
+      rootElement().appendChild(overlay);
+      state.overlay = overlay;
+      return overlay;
+    }
+
+    function scheduleLayout() {
+      if (state.layoutPending || state.generation < 0) return;
+      state.layoutPending = true;
+      requestAnimationFrame(function () {
+        state.layoutPending = false;
+        if (window.__FuriHook102 !== state) return;
+        renderVisible();
+      });
+    }
+
     function ensureWalkers() {
       const root = rootElement();
       if (!root) return;
-      if (!state.initialWalker) state.initialWalker = document.createTreeWalker(root, 4);
+      if (!state.initialWalker) state.initialWalker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       if (!state.observer) {
         state.observer = new MutationObserver(function (mutations) {
+          let languageChanged = false;
+          let layoutChanged = false;
           for (const mutation of mutations) {
+            if (mutation.target.nodeType === 1 && mutation.target.matches(OWNED)) continue;
             if (mutation.type === "characterData") {
-              state.processed.delete(mutation.target);
-              state.offsets.delete(mutation.target);
+              invalidateNode(mutation.target);
               queueDirtyNode(mutation.target);
+              languageChanged = true;
+              layoutChanged = true;
             } else if (mutation.type === "childList") {
-              for (const added of mutation.addedNodes) queueDirtyRoot(added);
+              if (mutation.target.nodeType === 1 && mutation.target.closest(OWNED)) continue;
+              for (const removed of mutation.removedNodes) removeDisconnected(removed);
+              for (const added of mutation.addedNodes) {
+                if (added.nodeType === 1 && added.matches(OWNED)) continue;
+                invalidateTrackedSubtree(added);
+                queueDirtyRoot(added);
+              }
+              languageChanged = true;
+              layoutChanged = true;
+            } else if (mutation.type === "attributes") {
+              if (mutation.target.nodeType === 1 && mutation.target.closest(OWNED)) continue;
+              if (mutation.attributeName === "lang" || mutation.attributeName === "xml:lang") {
+                languageChanged = true;
+                invalidateTrackedSubtree(mutation.target);
+                state.processed = new WeakSet();
+                queueDirtyRoot(mutation.target);
+              } else if (mutation.attributeName === "contenteditable") {
+                invalidateTrackedSubtree(mutation.target);
+                state.processed = new WeakSet();
+                queueDirtyRoot(mutation.target);
+              }
+              layoutChanged = true;
             }
           }
-          scheduleScan();
+          if (languageChanged) state.languageCache = new WeakMap();
+          if (layoutChanged) {
+            scheduleLayout();
+            scheduleScan();
+          }
         });
+        state.observer.observe(root, {subtree: true, childList: true, characterData: true,
+          attributes: true, attributeFilter: ["class", "style", "hidden", "lang", "xml:lang", "dir", "contenteditable"]});
       }
-      state.observer.observe(root, {subtree: true, childList: true, characterData: true});
+      if (!state.resizeObserver && typeof ResizeObserver === "function") {
+        state.resizeObserver = new ResizeObserver(scheduleLayout);
+      }
+    }
+
+    function nodeId(node) {
+      let id = state.nodeIds.get(node);
+      if (!id) {
+        id = state.nextNodeId++;
+        state.nodeIds.set(node, id);
+      }
+      return id;
+    }
+
+    function forgetRecord(id) {
+      const record = state.records.get(id);
+      state.records.delete(id);
+      state.nodes.delete(id);
+      if (!record) return;
+      for (const [key, element] of state.labelElements) {
+        if (key.startsWith(id + ":")) element.remove();
+      }
+      unobserveIfUnused(record.parent);
+    }
+
+    function unobserveIfUnused(element) {
+      if (!element || !state.resizeObserver) return;
+      for (const record of state.records.values()) if (record.parent === element) return;
+      if (state.observedElements.delete(element)) state.resizeObserver.unobserve(element);
+    }
+
+    function invalidateNode(node) {
+      for (const [id, record] of state.records) {
+        if (record.node === node) forgetRecord(id);
+      }
+      state.processed.delete(node);
+      state.offsets.delete(node);
+    }
+
+    function invalidateTrackedSubtree(root) {
+      for (const [id, record] of state.records) {
+        if (record.node === root || (root.nodeType === 1 && root.contains(record.node))) {
+          const node = record.node;
+          const offset = record.offset;
+          forgetRecord(id);
+          state.processed.delete(node);
+          state.offsets.set(node, offset);
+          queueDirtyNode(node);
+        }
+      }
+    }
+
+    function removeDisconnected(root) {
+      for (const [id, record] of state.records) {
+        if (record.node === root || (root.nodeType === 1 && root.contains(record.node))) {
+          if (!record.node.isConnected) forgetRecord(id);
+        }
+      }
+      if (root.nodeType === 1) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          state.processed.delete(node);
+          state.offsets.delete(node);
+        }
+      } else if (root.nodeType === 3) {
+        state.processed.delete(root);
+        state.offsets.delete(root);
+      }
     }
 
     function blocked(node) {
       const parent = node.parentElement;
       if (!parent || !parent.isConnected || parent.closest(SKIP)) return true;
-      if (parent.namespaceURI !== "http://www.w3.org/1999/xhtml") return true;
-      if (parent.closest("[contenteditable]:not([contenteditable='false'])")) return true;
-      if (parent.closest("[data-furihook-owned='1']")) return true;
+      if (parent.namespaceURI !== XHTML || parent.closest("[contenteditable]:not([contenteditable='false'])")) return true;
+      if (parent.closest(OWNED)) return true;
       return false;
+    }
+
+    function nearestBlock(node) {
+      let element = node.parentElement;
+      while (element && element !== document.body && element !== rootElement()) {
+        const display = getComputedStyle(element).display;
+        if (display !== "inline" && display !== "contents") return element;
+        element = element.parentElement;
+      }
+      return node.parentElement || rootElement();
+    }
+
+    function languageDecision(node, text) {
+      let element = node.parentElement;
+      while (element) {
+        const value = element.getAttribute("lang") || element.getAttribute("xml:lang");
+        if (value) {
+          const language = value.trim().toLowerCase().split(/[-_]/)[0];
+          if (language === "ja" || language === "jpn") return "japanese";
+          if (language === "zh" || language === "ko") return "excluded";
+          if (element !== document.documentElement && element !== document.body && language !== "en") break;
+        }
+        element = element.parentElement;
+      }
+      if (KANA.test(text)) return "japanese-candidate";
+      const block = nearestBlock(node);
+      let hasKana = state.languageCache.get(block);
+      if (hasKana === undefined) {
+        hasKana = KANA.test(block.textContent || "");
+        state.languageCache.set(block, hasKana);
+      }
+      return hasKana ? "japanese-context" : "unconfirmed";
     }
 
     function queueDirtyNode(node) {
@@ -122,7 +309,7 @@
         state.dirtyRootSet.delete(root);
         if (!root.isConnected) continue;
         if (root.nodeType === 3) return root;
-        state.dirtyWalker = document.createTreeWalker(root, 4);
+        state.dirtyWalker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       }
     }
 
@@ -148,8 +335,17 @@
         state.offsets.delete(node);
       }
       if (!KANJI.test(chunk.text)) return total;
+      const language = languageDecision(node, chunk.text);
+      if (language === "excluded" || language === "unconfirmed") return total + chunk.text.length;
       const id = state.nextId++;
-      state.nodes.set(id, {node: node, offset: chunk.start, text: chunk.text});
+      const record = {id: id, node: node, nodeId: nodeId(node), offset: chunk.start,
+        text: chunk.text, segments: null, language: language, parent: nearestBlock(node), labels: []};
+      state.nodes.set(id, record);
+      state.records.set(id, record);
+      if (state.records.size > MAX_TRACKED_RECORDS) {
+        forgetRecord(state.records.keys().next().value);
+        state.stats.staleResultCount++;
+      }
       result.items.push({id: id, offset: chunk.start, text: chunk.text});
       return total + chunk.text.length;
     }
@@ -157,25 +353,20 @@
     function takeBatch() {
       ensureWalkers();
       const result = {generation: state.generation, items: [], more: false};
-      if (!state.initialWalker && !state.dirtyNodes.length && !state.dirtyRoots.length && !state.dirtyWalker) {
-        return result;
-      }
+      if (!state.initialWalker && !state.dirtyNodes.length && !state.dirtyRoots.length && !state.dirtyWalker) return result;
       let visited = 0;
       let dirtyVisited = 0;
       let total = 0;
       while (visited < MAX_VISITED_NODES) {
         let node = null;
-        let dirty = false;
         if (dirtyVisited < MAX_VISITED_NODES / 2) {
           node = nextDirtyNode();
-          dirty = node !== null;
-          if (dirty) dirtyVisited++;
+          if (node) dirtyVisited++;
         }
         if (!node) node = nextInitialNode();
         if (!node) {
           node = nextDirtyNode();
-          dirty = node !== null;
-          if (dirty) dirtyVisited++;
+          if (node) dirtyVisited++;
         }
         if (!node) break;
         visited++;
@@ -197,81 +388,366 @@
       state.scanPending = true;
       setTimeout(function () {
         state.scanPending = false;
-        if (window.__FuriHook102 !== state) return;
+        if (window.__FuriHook102 !== state || state.hidden) return;
         const batch = takeBatch();
         if (batch.items.length) state.batches.push(batch);
         if (batch.more && state.batches.length < MAX_PENDING_BATCHES) scheduleScan();
       }, 80);
     }
 
-    function wrapTextNode(node, offset, original, segments) {
-      if (!node.isConnected || blocked(node)
-          || node.data.slice(offset, offset + original.length) !== original) {
-        if (node.isConnected) {
-          state.processed.delete(node);
-          state.offsets.delete(node);
-          queueDirtyNode(node);
+    function observeParent(element) {
+      if (!state.resizeObserver || !element || state.observedElements.has(element)
+          || state.observedElements.size >= 256) return;
+      state.observedElements.add(element);
+      state.resizeObserver.observe(element);
+    }
+
+    function visibleViewport() {
+      const viewport = window.visualViewport;
+      const width = viewport ? viewport.width : document.documentElement.clientWidth;
+      const height = viewport ? viewport.height : document.documentElement.clientHeight;
+      const left = viewport ? viewport.offsetLeft : 0;
+      const top = viewport ? viewport.offsetTop : 0;
+      return {left: left, top: top, right: left + width, bottom: top + height,
+        width: width, height: height, scale: viewport ? viewport.scale : 1};
+    }
+
+    function elementVisible(element) {
+      let current = element;
+      while (current && current.nodeType === 1) {
+        const style = getComputedStyle(current);
+        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse"
+            || Number(style.opacity) === 0) return false;
+        current = current.parentElement;
+      }
+      return true;
+    }
+
+    function clippingRect(node, viewport) {
+      let clip = {left: viewport.left, top: viewport.top, right: viewport.right, bottom: viewport.bottom};
+      let current = node.parentElement;
+      while (current && current !== document.documentElement) {
+        const style = getComputedStyle(current);
+        if (/(hidden|clip|scroll|auto)/.test(style.overflowX) || /(hidden|clip|scroll|auto)/.test(style.overflowY)) {
+          const rect = current.getBoundingClientRect();
+          const scaleX = current.offsetWidth > 0 ? rect.width / current.offsetWidth : 1;
+          const scaleY = current.offsetHeight > 0 ? rect.height / current.offsetHeight : 1;
+          const clientLeft = rect.left + current.clientLeft * scaleX;
+          const clientTop = rect.top + current.clientTop * scaleY;
+          const client = {left: clientLeft, top: clientTop,
+            right: clientLeft + current.clientWidth * scaleX,
+            bottom: clientTop + current.clientHeight * scaleY};
+          if (/(hidden|clip|scroll|auto)/.test(style.overflowX)) {
+            clip.left = Math.max(clip.left, client.left);
+            clip.right = Math.min(clip.right, client.right);
+          }
+          if (/(hidden|clip|scroll|auto)/.test(style.overflowY)) {
+            clip.top = Math.max(clip.top, client.top);
+            clip.bottom = Math.min(clip.bottom, client.bottom);
+          }
         }
+        current = current.parentElement;
+      }
+      return clip;
+    }
+
+    function textRects(block) {
+      const rects = [];
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      let visited = 0;
+      let node;
+      while ((node = walker.nextNode())) {
+        if (++visited > MAX_OCCUPANCY_NODES) return null;
+        if (!node.data || blocked(node) || !elementVisible(node.parentElement)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width > 0 && rect.height > 0) rects.push(rectObject(rect));
+        }
+      }
+      return rects;
+    }
+
+    function geometryRoot(block) {
+      return block.parentElement || block;
+    }
+
+    function textStyle(parent) {
+      const style = getComputedStyle(parent);
+      const fontSize = Number.parseFloat(style.fontSize) || 16;
+      const fontFamily = style.fontFamily || "sans-serif";
+      const weight = style.fontWeight || "400";
+      const fontStyle = style.fontStyle || "normal";
+      const fontStretch = style.fontStretch || "normal";
+      const rubySize = Math.max(8, fontSize * 0.5);
+      return {fontSize: rubySize, fontFamily: fontFamily,
+        font: fontStyle + " " + weight + " " + rubySize + "px " + fontFamily,
+        fontStyle: fontStyle, fontWeight: weight, fontStretch: fontStretch,
+        color: style.color, baseFont: style.font,
+        writingMode: style.writingMode, letterSpacing: style.letterSpacing};
+    }
+
+    function labelMetrics(text, baseText, font, baseRect, transformScale) {
+      const context = measureContext;
+      context.font = font.font;
+      if ("fontStretch" in context) context.fontStretch = font.fontStretch;
+      if ("letterSpacing" in context) context.letterSpacing = font.letterSpacing;
+      const metrics = context.measureText(text);
+      const acceptedCanvasFont = context.font;
+      context.font = font.baseFont;
+      if ("fontStretch" in context) context.fontStretch = font.fontStretch;
+      if ("letterSpacing" in context) context.letterSpacing = font.letterSpacing;
+      const baseMetrics = context.measureText(baseText);
+      const scaleX = baseMetrics.width > 0 ? baseRect.width / baseMetrics.width : transformScale.x;
+      const scaleY = transformScale.y;
+      const height = Math.max(font.fontSize, metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent);
+      return {width: metrics.width * scaleX, height: height * scaleY, scaleX: scaleX, scaleY: scaleY,
+        requestedFont: font.font, acceptedCanvasFont: acceptedCanvasFont};
+    }
+
+    function hasUnsupportedTransform(element) {
+      let current = element;
+      while (current && current !== document.documentElement) {
+        const value = getComputedStyle(current).transform;
+        if (value && value !== "none") {
+          const matrix = new DOMMatrixReadOnly(value);
+          if (Math.abs(matrix.b) > 0.001 || Math.abs(matrix.c) > 0.001
+              || Math.abs(matrix.m14) > 0.001 || Math.abs(matrix.m24) > 0.001
+              || Math.abs(matrix.m34) > 0.001) return true;
+        }
+        current = current.parentElement;
+      }
+      return false;
+    }
+
+    function transformScale(element) {
+      let x = 1;
+      let y = 1;
+      let current = element;
+      while (current && current !== document.documentElement) {
+        const style = getComputedStyle(current);
+        const zoom = Number.parseFloat(style.zoom);
+        if (Number.isFinite(zoom) && zoom > 0) {
+          x *= zoom;
+          y *= zoom;
+        }
+        if (style.transform && style.transform !== "none") {
+          const matrix = new DOMMatrixReadOnly(style.transform);
+          x *= Math.abs(matrix.a);
+          y *= Math.abs(matrix.d);
+        }
+        current = current.parentElement;
+      }
+      return {x: x, y: y};
+    }
+
+    function intersectsAny(rect, rects) {
+      for (const other of rects) if (intersects(rect, other)) return true;
+      return false;
+    }
+
+    function isClipped(rect, clip) {
+      return rect.left < clip.left || rect.right > clip.right || rect.top < clip.top || rect.bottom > clip.bottom;
+    }
+
+    function isOccluded(rect, node, block) {
+      const points = [
+        [(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2],
+        [rect.left + rect.width * 0.2, rect.top + rect.height * 0.2],
+        [rect.left + rect.width * 0.8, rect.top + rect.height * 0.2],
+        [rect.left + rect.width * 0.2, rect.top + rect.height * 0.8],
+        [rect.left + rect.width * 0.8, rect.top + rect.height * 0.8]
+      ];
+      for (const point of points) {
+        const hits = document.elementsFromPoint(point[0], point[1]);
+        const top = hits.find(element => !element.matches(OWNED));
+        if (!top) return true;
+        if (top !== node.parentElement && !top.contains(node) && !top.contains(block)) return true;
+        const style = getComputedStyle(top);
+        if (style.backgroundImage !== "none" && top !== node.parentElement && !top.contains(node)) return true;
+      }
+      return false;
+    }
+
+    function segmentRects(record, segment) {
+      const range = document.createRange();
+      range.setStart(record.node, record.offset + segment[0]);
+      range.setEnd(record.node, record.offset + segment[1]);
+      return Array.from(range.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0);
+    }
+
+    function removeLabels() {
+      if (state.layer) state.layer.replaceChildren();
+      state.labelElements.clear();
+      for (const record of state.records.values()) record.labels = [];
+    }
+
+    state.hideLabels = removeLabels;
+
+    function renderVisible() {
+      state.stats.layoutPasses++;
+      if (state.hidden || document.visibilityState === "hidden" || !rootElement()) {
+        removeLabels();
         return 0;
       }
-      const fragment = document.createDocumentFragment();
-      if (offset > 0) fragment.appendChild(document.createTextNode(node.data.slice(0, offset)));
-      let cursor = 0;
-      let rubyCount = 0;
-      for (const segment of segments) {
-        const start = segment[0];
-        const end = segment[1];
-        const reading = segment[2];
-        if (start < cursor || end <= start || end > original.length || !reading) continue;
-        if (start > cursor) fragment.appendChild(document.createTextNode(original.slice(cursor, start)));
-        const ruby = document.createElement("ruby");
-        ruby.setAttribute("data-furihook-owned", "1");
-        ruby.setAttribute("style", "ruby-position:over;ruby-align:center");
-        const rb = document.createElement("rb");
-        rb.textContent = original.slice(start, end);
-        const rt = document.createElement("rt");
-        rt.setAttribute("data-furihook-owned", "1");
-        rt.setAttribute("style", "font-size:0.5em;line-height:1;user-select:none;-webkit-user-select:none");
-        rt.textContent = reading;
-        ruby.appendChild(rb);
-        ruby.appendChild(rt);
-        fragment.appendChild(ruby);
-        cursor = end;
-        rubyCount++;
+      const viewport = visibleViewport();
+      const overlay = ensureOverlay();
+      const layer = state.layer || overlay;
+      layer.replaceChildren();
+      state.labelElements.clear();
+      for (const record of state.records.values()) record.labels = [];
+      const occupancyByRoot = new Map();
+      const labelRects = [];
+      let painted = 0;
+      for (const record of state.records.values()) {
+        if (painted >= MAX_VISIBLE_ANNOTATIONS) break;
+        if (!record.segments || !record.segments.length || !record.node.isConnected
+            || record.node.data.slice(record.offset, record.offset + record.text.length) !== record.text
+            || blocked(record.node) || !elementVisible(record.node.parentElement)) continue;
+        const hostBox = record.node.parentElement.getBoundingClientRect();
+        if (hostBox.right < viewport.left - VIEWPORT_MARGIN || hostBox.left > viewport.right + VIEWPORT_MARGIN
+            || hostBox.bottom < viewport.top - VIEWPORT_MARGIN || hostBox.top > viewport.bottom + VIEWPORT_MARGIN) continue;
+        observeParent(record.parent);
+        const region = geometryRoot(record.parent);
+        let occupied = occupancyByRoot.get(region);
+        if (occupied === undefined) {
+          occupied = textRects(region);
+          occupancyByRoot.set(region, occupied);
+        }
+        if (!occupied) {
+          state.stats.skippedGeometryCount++;
+          continue;
+        }
+        const clip = clippingRect(record.node, viewport);
+        for (const segment of record.segments) {
+          if (painted >= MAX_VISIBLE_ANNOTATIONS) break;
+          if (!Array.isArray(segment) || segment.length < 3 || !Number.isInteger(segment[0])
+              || !Number.isInteger(segment[1]) || segment[0] < 0 || segment[1] <= segment[0]
+              || segment[1] > record.text.length || typeof segment[2] !== "string" || !segment[2]) continue;
+          const fragments = segmentRects(record, segment);
+          if (fragments.length !== 1) {
+            if (fragments.length > 1) state.stats.skippedGeometryCount++;
+            continue;
+          }
+          const base = fragments[0];
+          if (base.right < viewport.left - VIEWPORT_MARGIN || base.left > viewport.right + VIEWPORT_MARGIN
+              || base.bottom < viewport.top - VIEWPORT_MARGIN || base.top > viewport.bottom + VIEWPORT_MARGIN) continue;
+          const font = textStyle(record.node.parentElement);
+          if (font.writingMode !== "horizontal-tb" || hasUnsupportedTransform(record.node.parentElement)) {
+            state.stats.skippedGeometryCount++;
+            continue;
+          }
+          const baseText = record.text.slice(segment[0], segment[1]);
+          const metrics = labelMetrics(segment[2], baseText, font, base, transformScale(record.node.parentElement));
+          const gap = Math.max(1, font.fontSize * 0.16);
+          const label = document.createElement("span");
+          label.setAttribute("data-furihook-owned", "1");
+          label.setAttribute("data-furihook-reading", segment[2]);
+          label.textContent = segment[2];
+          label.style.cssText = "all:initial!important;position:absolute!important;display:block!important;box-sizing:content-box!important;white-space:nowrap!important;pointer-events:none!important;user-select:none!important;-webkit-user-select:none!important;line-height:1!important;margin:0!important;padding:0!important;border:0!important;text-align:center!important;transform:translateX(-50%) scale(" + metrics.scaleX + "," + metrics.scaleY + ")!important;transform-origin:top center!important;";
+          label.style.setProperty("left", ((base.left + base.right) / 2) + "px", "important");
+          label.style.setProperty("top", (base.top - metrics.height - gap) + "px", "important");
+          label.style.setProperty("font-style", font.fontStyle, "important");
+          label.style.setProperty("font-weight", font.fontWeight, "important");
+          label.style.setProperty("font-size", font.fontSize + "px", "important");
+          label.style.setProperty("font-family", font.fontFamily, "important");
+          label.style.setProperty("font-stretch", font.fontStretch, "important");
+          label.style.setProperty("color", font.color, "important");
+          layer.appendChild(label);
+          const labelRect = rectObject(label.getBoundingClientRect());
+          if (isClipped(labelRect, clip) || isClipped(labelRect, viewport)) {
+            label.remove();
+            state.stats.skippedClippedCount++;
+            continue;
+          }
+          if (intersectsAny(labelRect, occupied) || intersectsAny(labelRect, labelRects)) {
+            label.remove();
+            state.stats.skippedOverlapCount++;
+            continue;
+          }
+          if (isOccluded(labelRect, record.node, record.parent)) {
+            label.remove();
+            state.stats.skippedOccludedCount++;
+            continue;
+          }
+          const key = record.id + ":" + segment[0] + ":" + segment[1];
+          state.labelElements.set(key, label);
+          const info = {nodeId: record.nodeId, baseText: baseText,
+            reading: segment[2], segmentStart: record.offset + segment[0],
+            segmentEnd: record.offset + segment[1],
+            baseRect: rectObject(base), readingRect: labelRect,
+            requestedFont: metrics.requestedFont, acceptedCanvasFont: metrics.acceptedCanvasFont,
+            computedFont: getComputedStyle(label).font,
+            computedFontSize: getComputedStyle(label).fontSize,
+            textRects: occupied,
+            visible: true, clearance: "clear"};
+          record.labels.push(info);
+          labelRects.push(labelRect);
+          painted++;
+        }
       }
-      if (rubyCount === 0) return 0;
-      if (cursor < original.length) fragment.appendChild(document.createTextNode(original.slice(cursor)));
-      const tailStart = offset + original.length;
-      if (tailStart < node.data.length) fragment.appendChild(document.createTextNode(node.data.slice(tailStart)));
-      const parent = node.parentNode;
-      if (state.initialWalker && state.initialWalker.currentNode === node) {
-        state.initialWalker.currentNode = parent;
+      updateAnimationFrame();
+      return painted;
+    }
+
+    state.scheduleLayout = scheduleLayout;
+    function updateAnimationFrame() {
+      if (state.animationPending) return;
+      for (const record of state.records.values()) {
+        if (!record.labels.length) continue;
+        let element = record.node.parentElement;
+        while (element && element !== document.documentElement) {
+          if (element.getAnimations().some(animation => animation.playState === "running")) {
+            state.animationPending = true;
+            requestAnimationFrame(function () {
+              state.animationPending = false;
+              scheduleLayout();
+            });
+            return;
+          }
+          element = element.parentElement;
+        }
       }
-      if (state.dirtyWalker && state.dirtyWalker.currentNode === node) {
-        state.dirtyWalker.currentNode = parent;
-      }
-      parent.replaceChild(fragment, node);
-      return rubyCount;
     }
 
     state.apply = function (payload) {
-      if (payload.generation !== state.generation || window.__FuriHook102 !== state) return 0;
-      let applied = 0;
-      for (const entry of payload.items) {
-        const tracked = state.nodes.get(entry.id);
+      if (!payload || payload.generation !== state.generation || window.__FuriHook102 !== state) return 0;
+      const updatedRecords = [];
+      for (const entry of payload.items || []) {
+        const record = state.nodes.get(entry.id);
         state.nodes.delete(entry.id);
-        if (tracked) applied += wrapTextNode(tracked.node, entry.offset, entry.text, entry.segments);
+        if (!record || record.node.data.slice(entry.offset, entry.offset + entry.text.length) !== entry.text
+            || record.offset !== entry.offset || record.text !== entry.text || !record.node.isConnected) {
+          state.stats.staleResultCount++;
+          if (record) forgetRecord(record.id);
+          continue;
+        }
+        record.segments = Array.isArray(entry.segments) ? entry.segments : [];
+        record.labels = [];
+        updatedRecords.push(record);
       }
-      return applied;
+      const viewport = visibleViewport();
+      const visibleUpdate = updatedRecords.some(record => record.segments.some(segment => {
+        const fragments = segmentRects(record, segment);
+        return fragments.some(rect => rect.right > viewport.left && rect.left < viewport.right
+          && rect.bottom > viewport.top && rect.top < viewport.bottom);
+      }));
+      if (visibleUpdate) renderVisible();
+      scheduleLayout();
+      return updatedRecords.reduce((count, record) => count + record.labels.length, 0);
     };
+
     state.drop = function (ids) {
-      for (const id of ids) {
-        const tracked = state.nodes.get(id);
+      for (const id of ids || []) {
+        const record = state.nodes.get(id);
+        if (!record) continue;
         state.nodes.delete(id);
-        if (!tracked || !tracked.node.isConnected) continue;
-        state.processed.delete(tracked.node);
-        state.offsets.set(tracked.node, tracked.offset);
-        queueDirtyNode(tracked.node);
+        forgetRecord(id);
+        if (record.node.isConnected) {
+          state.processed.delete(record.node);
+          state.offsets.set(record.node, record.offset);
+          queueDirtyNode(record.node);
+        }
       }
       scheduleScan();
     };
@@ -288,7 +764,97 @@
       if (batch.items.length) state.batches.push(batch);
       if (batch.more) scheduleScan();
     };
+    state.inspect = function () {
+      const viewport = visibleViewport();
+      const annotations = [];
+      const hostNodes = new Map();
+      const uniqueNodeIds = new Set();
+      let annotationCount = 0;
+      let visibleAnnotationCount = 0;
+      let analyzedSegmentCount = 0;
+      for (const record of state.records.values()) {
+        uniqueNodeIds.add(record.nodeId);
+        if (record.segments) analyzedSegmentCount += record.segments.length;
+        if (!hostNodes.has(record.nodeId) && hostNodes.size < 100) {
+          const siblings = record.node.parentNode ? Array.from(record.node.parentNode.childNodes) : [];
+          hostNodes.set(record.nodeId, {nodeId: record.nodeId, connected: record.node.isConnected,
+            data: record.node.data, parentTag: record.node.parentElement ? record.node.parentElement.tagName : "",
+            parentElementId: record.node.parentElement ? nodeId(record.node.parentElement) : 0,
+            childIndex: siblings.indexOf(record.node)});
+        }
+        for (const label of record.labels) {
+          annotationCount++;
+          const onScreen = label.readingRect.right > viewport.left && label.readingRect.left < viewport.right
+            && label.readingRect.bottom > viewport.top && label.readingRect.top < viewport.bottom;
+          if (onScreen) visibleAnnotationCount++;
+          if (annotations.length < MAX_VISIBLE_ANNOTATIONS) annotations.push(label);
+        }
+      }
+      return JSON.stringify({generation: state.generation, active: state.generation >= 0 && !state.hidden,
+        hostNodeCount: uniqueNodeIds.size,
+        cachedReadingCount: Array.from(state.records.values()).filter(record => record.segments).length,
+        analyzedSegmentCount: analyzedSegmentCount,
+        annotationCount: annotationCount, visibleAnnotationCount: visibleAnnotationCount,
+        skippedOverlapCount: state.stats.skippedOverlapCount, skippedClippedCount: state.stats.skippedClippedCount,
+        skippedOccludedCount: state.stats.skippedOccludedCount, skippedGeometryCount: state.stats.skippedGeometryCount,
+        staleResultCount: state.stats.staleResultCount, layoutPasses: state.stats.layoutPasses,
+        devicePixelRatio: window.devicePixelRatio || 1,
+        visualViewport: {offsetLeft: viewport.left, offsetTop: viewport.top, width: viewport.width,
+          height: viewport.height, scale: viewport.scale},
+        scan: {dirtyNodes: state.dirtyNodes.length, dirtyRoots: state.dirtyRoots.length,
+          dirtyWalker: state.dirtyWalker !== null, initialDone: state.initialDone,
+          pendingBatches: state.batches.length, awaitingReadings: state.nodes.size},
+        hostNodes: Array.from(hostNodes.values()), annotations: annotations});
+    };
+    state.dispose = function () {
+      state.generation = -1;
+      if (state.observer) state.observer.disconnect();
+      if (state.resizeObserver) state.resizeObserver.disconnect();
+      window.removeEventListener("scroll", scheduleLayout, true);
+      window.removeEventListener("resize", scheduleLayout);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener("scroll", scheduleLayout);
+        window.visualViewport.removeEventListener("resize", scheduleLayout);
+      }
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      window.removeEventListener("pagehide", pageHidden);
+      window.removeEventListener("pageshow", pageShown);
+      document.removeEventListener("transitionrun", state.scheduleLayout, true);
+      document.removeEventListener("animationstart", state.scheduleLayout, true);
+      if (document.fonts) document.fonts.removeEventListener("loadingdone", state.scheduleLayout);
+      if (state.overlay) state.overlay.remove();
+      state.records.clear();
+      state.nodes.clear();
+    };
     return state;
+  }
+
+  function visibilityChanged() {
+    const state = window.__FuriHook102;
+    if (!state || state.generation < 0) return;
+    state.hidden = document.visibilityState === "hidden";
+    if (state.hidden) state.hideLabels();
+    else {
+      state.installObserver();
+      state.processInitial();
+      state.scheduleLayout && state.scheduleLayout();
+    }
+  }
+
+  function pageHidden() {
+    const state = window.__FuriHook102;
+    if (!state || state.generation < 0) return;
+    state.hidden = true;
+    state.hideLabels();
+  }
+
+  function pageShown() {
+    const state = window.__FuriHook102;
+    if (!state || state.generation < 0) return;
+    state.hidden = false;
+    state.installObserver();
+    state.processInitial();
+    state.scheduleLayout && state.scheduleLayout();
   }
 
   window.__FuriHook102 = window.__FuriHook102 || null;
@@ -300,11 +866,26 @@
         window.__FuriHook102.processInitial();
         return true;
       }
-      if (window.__FuriHook102 && window.__FuriHook102.observer) window.__FuriHook102.observer.disconnect();
+      if (window.__FuriHook102 && window.__FuriHook102.dispose) window.__FuriHook102.dispose();
       const state = createState(generation);
       window.__FuriHook102 = state;
       state.installObserver();
       state.processInitial();
+      window.addEventListener("scroll", state.scheduleLayout, {capture: true, passive: true});
+      window.addEventListener("resize", state.scheduleLayout, {passive: true});
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("scroll", state.scheduleLayout, {passive: true});
+        window.visualViewport.addEventListener("resize", state.scheduleLayout, {passive: true});
+      }
+      document.addEventListener("visibilitychange", visibilityChanged);
+      window.addEventListener("pagehide", pageHidden);
+      window.addEventListener("pageshow", pageShown);
+      document.addEventListener("transitionrun", state.scheduleLayout, true);
+      document.addEventListener("animationstart", state.scheduleLayout, true);
+      if (document.fonts) {
+        document.fonts.ready.then(state.scheduleLayout);
+        document.fonts.addEventListener("loadingdone", state.scheduleLayout);
+      }
       return true;
     },
     pull: function (generation) {
@@ -317,25 +898,14 @@
     drop: function (json) {
       if (!window.__FuriHook102) return;
       window.__FuriHook102.drop(JSON.parse(json));
+    },
+    inspect: function () {
+      return window.__FuriHook102 ? window.__FuriHook102.inspect() : "";
+    },
+    dispose: function () {
+      if (!window.__FuriHook102) return;
+      window.__FuriHook102.dispose();
+      window.__FuriHook102 = null;
     }
   };
-
-  document.addEventListener("copy", function (event) {
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0 || !selection.toString()) return;
-    const range = selection.getRangeAt(0);
-    const container = range.commonAncestorContainer.nodeType === 1
-      ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
-    if (!container || !(container.closest("ruby[data-furihook-owned='1']")
-        || container.matches("ruby[data-furihook-owned='1']")
-        || container.querySelector("ruby[data-furihook-owned='1']"))) return;
-    const wrapper = document.createElement("div");
-    wrapper.appendChild(range.cloneContents());
-    for (const annotation of wrapper.querySelectorAll("rt[data-furihook-owned='1']")) annotation.remove();
-    if (event.clipboardData) {
-      event.clipboardData.setData("text/plain", wrapper.textContent || "");
-      event.clipboardData.setData("text/html", wrapper.innerHTML);
-      event.preventDefault();
-    }
-  }, true);
 })();

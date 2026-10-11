@@ -20,6 +20,10 @@
   <p id="link-result">链接触发次数：<span id="link-count">0</span></p>
   <button id="update-button" type="button">生成动态 Ruby 注音</button>
   <p id="updated">更新前</p>
+  <section id="react-fixture">
+    <p>React 页面原文与译文切换</p>
+    <div id="react-root"></div>
+  </section>
   <label for="excluded-input">输入框排除检查</label>
   <input id="excluded-input" value="漢字入力">
   <div id="excluded-editable" contenteditable="true">編集可能な漢字</div>
@@ -30,7 +34,7 @@
       const original = document.getElementById("original");
       const updated = document.getElementById("updated");
       const linkCount = document.getElementById("link-count");
-      const expectedOriginal = ["今日:きょう", "学校:がっこう", "日本語:にほんご", "勉強:べんきょう"];
+        const expectedOriginal = ["今日:きょう", "学校:がっこう", "日本語:にほんご", "勉強:べんきょう"];
       let updateRequested = false;
 
       function baseText(element) {
@@ -39,21 +43,44 @@
         return clone.textContent;
       }
 
-      function rubyPairs(element) {
-        return Array.from(element.querySelectorAll("ruby")).map((ruby) => {
-          const base = ruby.querySelector("rb")?.textContent ||
-            Array.from(ruby.childNodes).filter((node) => node.nodeType === Node.TEXT_NODE)
-              .map((node) => node.textContent).join("");
-          const reading = ruby.querySelector("rt")?.textContent || "";
-          return `${base}:${reading}`;
-        });
+      function hookInspection() {
+        return window.FuriHook102 && typeof window.FuriHook102.inspect === "function"
+          ? window.FuriHook102.inspect() : null;
+      }
+
+      function annotationsForText(inspection, text) {
+        if (!inspection) return [];
+        const ids = new Set(inspection.hostNodes.filter((node) => node.connected && node.data === text)
+          .map((node) => node.nodeId));
+        return inspection.annotations.filter((annotation) => ids.has(annotation.nodeId));
+      }
+
+      function pairs(annotations) {
+        return annotations.map((annotation) => `${annotation.baseText}:${annotation.reading}`);
+      }
+
+      function rectanglesIntersect(a, b) {
+        return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+      }
+
+      function layoutIsClear(annotations) {
+        return annotations.filter((annotation) => annotation.visible).every((annotation) =>
+          annotation.clearance === "clear" && annotation.readingRect.bottom <= annotation.baseRect.top
+            && annotation.textRects.every((rect) => !rectanglesIntersect(annotation.readingRect, rect)));
       }
 
       function renderReport() {
-        const originalPairs = rubyPairs(original);
-        const updatedPairs = rubyPairs(updated);
+        const inspection = hookInspection();
+        const originalAnnotations = annotationsForText(inspection, original.textContent);
+        const updatedAnnotations = annotationsForText(inspection, updated.textContent);
         const expectedUpdated = ["明日:あした", "図書館:としょかん", "行:い"];
         const existing = document.getElementById("user-ruby");
+        const react = window.reactFixture ? window.reactFixture.inspect() : null;
+        const reactAnnotations = react ? annotationsForText(inspection, react.postText) : [];
+        const reactRows = react ? annotationsForText(inspection, react.schoolText || "") : [];
+        const reactAdded = react ? annotationsForText(inspection, react.addedText || "") : [];
+        const originalPairs = pairs(originalAnnotations);
+        const updatedPairs = pairs(updatedAnnotations);
         const report = {
           phase: "waiting",
           originalText: baseText(original),
@@ -70,6 +97,33 @@
           editableTextPreserved: baseText(document.getElementById("excluded-editable")) === "編集可能な漢字",
           existingRubyText: existing?.textContent || "",
           existingRubyOwned: existing?.hasAttribute("data-furihook-owned") || false,
+          layoutIsClear: layoutIsClear(originalAnnotations),
+          visibleOriginalAnnotationCount: originalAnnotations.filter((item) => item.visible).length,
+          reactTranslationOnly: Boolean(react && react.mode === "translation"
+            && react.postText === "今天去学校学习日语。" && react.postChildCount === 1
+            && react.postNodeIdentityPreserved && react.postNodeParentPreserved
+            && react.postNodeData === react.postText && reactAnnotations.length === 0),
+          reactOriginalUpdated: Boolean(react && react.mode === "original"
+            && react.postText === "今日は学校へ行きます。" && react.postChildCount === 1
+            && react.postNodeIdentityPreserved && react.postNodeParentPreserved
+            && react.postNodeData === react.postText
+            && reactAnnotations.length > 0 && layoutIsClear(reactAnnotations)),
+          reactListUpdated: Boolean(react && react.schoolText === "今日は大学。"
+            && react.schoolNodeIdentityPreserved && react.schoolElementIdentityPreserved
+            && react.addedText === "明日学校へ行く。" && react.addedRenderedByReact
+            && react.removedRowDisconnected && reactRows.length > 0 && reactAdded.length > 0),
+          react: react,
+          reactAnnotationPairs: pairs(reactAnnotations),
+          reactListAnnotationPairs: pairs(reactRows.concat(reactAdded)),
+          overlaySummary: inspection ? {
+            generation: inspection.generation,
+            annotationCount: inspection.annotationCount,
+            visibleAnnotationCount: inspection.visibleAnnotationCount,
+            skippedOverlapCount: inspection.skippedOverlapCount,
+            skippedClippedCount: inspection.skippedClippedCount,
+            skippedOccludedCount: inspection.skippedOccludedCount,
+            analyzedSegmentCount: inspection.analyzedSegmentCount
+          } : null,
           inputAndEditableExcluded: document.querySelectorAll(
             "#excluded-input ruby[data-furihook-owned], #excluded-editable ruby[data-furihook-owned]"
           ).length === 0 && document.querySelectorAll("#excluded-editable ruby").length === 0 &&
@@ -77,7 +131,8 @@
           existingRubyPreserved: Boolean(existing && existing.textContent === "漢かん" &&
             !existing.hasAttribute("data-furihook-owned"))
         };
-        if (report.originalRubyMatch && (!updateRequested || report.updatedRubyMatch)) {
+        if (report.originalRubyMatch && report.reactTranslationOnly
+            && (!updateRequested || report.updatedRubyMatch)) {
           report.phase = "ready";
         }
         result.textContent = JSON.stringify(report);
@@ -92,8 +147,93 @@
         updated.textContent = "明日は図書館へ行きます。";
         renderReport();
       });
+      window.fixtureReport = renderReport;
       setInterval(renderReport, 250);
       renderReport();
+    })();
+  </script>
+  <script src="vendor/react-18.3.1.production.min.js"></script>
+  <script src="vendor/react-dom-18.3.1.production.min.js"></script>
+  <script>
+    (() => {
+      const h = React.createElement;
+      const tracked = {post: null, rows: new Map(), removed: null};
+
+      function ReactFixture() {
+        const [mode, setMode] = React.useState('translation');
+        const [rows, setRows] = React.useState([
+          {key: 'school', text: '昨日は東京へ行きました。'},
+          {key: 'tomorrow', text: '明日は図書館に行きます。'}
+        ]);
+        const source = mode === 'translation' ? '今天去学校学习日语。' : '今日は学校へ行きます。';
+
+        React.useLayoutEffect(() => {
+          const post = document.getElementById('react-current');
+          if (!tracked.post && post) tracked.post = post.firstChild;
+          for (const row of rows) {
+            if (tracked.rows.has(row.key)) continue;
+            const element = document.querySelector('[data-react-row="' + row.key + '"]');
+            if (element) tracked.rows.set(row.key, {element, node: element.firstChild});
+          }
+          const tomorrow = tracked.rows.get('tomorrow');
+          if (tomorrow && !rows.some(row => row.key === 'tomorrow')) tracked.removed = tomorrow;
+        });
+
+        window.reactFixture = {
+          setMode,
+          reconcileList() {
+            setRows([
+              {key: 'school', text: '今日は大学。'},
+              {key: 'added', text: '明日学校へ行く。'}
+            ]);
+          },
+          inspect() {
+            const post = document.getElementById('react-current');
+            const school = document.querySelector('[data-react-row="school"]');
+            const added = document.querySelector('[data-react-row="added"]');
+            const removed = tracked.removed;
+            return {
+              mode,
+              postText: post.textContent,
+              postChildCount: post.childNodes.length,
+              postNodeIdentityPreserved: tracked.post === post.firstChild,
+              postNodeParentPreserved: Boolean(tracked.post && tracked.post.parentNode === post),
+              postNodeData: tracked.post ? tracked.post.data : null,
+              schoolText: school ? school.textContent : null,
+              schoolNodeIdentityPreserved: Boolean(school && tracked.rows.get('school')
+                && tracked.rows.get('school').node === school.firstChild),
+              schoolElementIdentityPreserved: Boolean(school && tracked.rows.get('school')
+                && tracked.rows.get('school').element === school),
+              addedText: added ? added.textContent : null,
+              addedRenderedByReact: Boolean(added && added.firstChild
+                && added.firstChild.nodeType === Node.TEXT_NODE),
+              removedRowDisconnected: Boolean(removed && !removed.element.isConnected
+                && !removed.node.isConnected),
+              reactProduction: React.version === '18.3.1'
+            };
+          }
+        };
+
+        return h('div', {id: 'react-content'},
+          h('button', {id: 'react-toggle', type: 'button', onClick: () => {
+            setMode(current => current === 'translation' ? 'original' : 'translation');
+          }}, mode === 'translation' ? '显示日语原文' : '显示中文译文'),
+          h('button', {id: 'react-list-update', type: 'button', onClick: () => {
+            setRows([
+              {key: 'school', text: '今日は大学。'},
+              {key: 'added', text: '明日学校へ行く。'}
+            ]);
+          }}, '更新 React 列表'),
+          h('p', {id: 'react-current', lang: mode === 'original' ? 'ja' : 'zh'}, source),
+          h('div', {id: 'react-list'}, rows.map(row => h('p', {
+            key: row.key,
+            id: 'react-row-' + row.key,
+            'data-react-row': row.key
+          }, row.text)))
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById('react-root')).render(h(ReactFixture));
     })();
   </script>
 </body>

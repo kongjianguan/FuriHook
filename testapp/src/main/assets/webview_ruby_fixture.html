@@ -14,6 +14,10 @@
 <body>
   <button id="dynamic-button" type="button">动态更新</button>
   <button id="copy-button" type="button">复制正文</button>
+  <section id="react-fixture" aria-label="React DOM reconciliation fixture">
+    <h2>React 页面更新验证</h2>
+    <div id="react-root"></div>
+  </section>
   <p id="plain">今日は学校。</p>
   <p id="dynamic">明日は図書館。</p>
   <a id="link" href="#link-result">日本語のリンク</a>
@@ -21,19 +25,20 @@
   <p id="editable" contenteditable="true">今日は学校。</p>
   <input id="password" type="password" value="今日は学校。">
   <p id="existing"><ruby data-fixture-existing="true"><rb>今日</rb><rt>きょう</rt></ruby>は学校。</p>
-  <p id="copy-source">今日は学校。</p>
+  <p id="copy-source">来週に映画を見ます。</p>
   <script>
     window.fixtureState = {
       dynamicRevision: 0,
       copyEvents: 0,
-      instanceId: Date.now().toString(36) + Math.random().toString(36).slice(2)
+      instanceId: Date.now().toString(36) + Math.random().toString(36).slice(2),
+      plainNode: document.getElementById('plain').firstChild
     };
     document.addEventListener('copy', function () {
       window.fixtureState.copyEvents += 1;
     }, true);
     document.getElementById('dynamic-button').addEventListener('click', function () {
       window.fixtureState.dynamicRevision += 1;
-      document.getElementById('dynamic').textContent = '今日は学校。';
+      document.getElementById('dynamic').textContent = '明日は図書館へ行きます。';
     });
     document.getElementById('link').addEventListener('click', function (event) {
       event.preventDefault();
@@ -49,6 +54,98 @@
       document.execCommand('copy');
       selection.removeAllRanges();
     });
+  </script>
+  <script src="vendor/react-18.3.1.production.min.js"></script>
+  <script src="vendor/react-dom-18.3.1.production.min.js"></script>
+  <script>
+    (function () {
+      const h = React.createElement;
+      const tracked = {post: null, rows: new Map(), removedRow: null};
+      const initialRows = [
+        {key: 'school', text: '昨日は東京へ行きました。'},
+        {key: 'tomorrow', text: '明日は図書館に行きます。'}
+      ];
+
+      function ReactFixture() {
+        const [mode, setMode] = React.useState('translation');
+        const [rows, setRows] = React.useState(initialRows);
+        const source = mode === 'translation' ? '今天去学校学习日语。' : '今日は学校へ行きます。';
+
+        React.useLayoutEffect(function () {
+          const post = document.getElementById('react-current');
+          if (!tracked.post && post) tracked.post = post.firstChild;
+          for (const row of rows) {
+            if (tracked.rows.has(row.key)) continue;
+            const element = document.querySelector('[data-react-row="' + row.key + '"]');
+            if (element) tracked.rows.set(row.key, {element: element, node: element.firstChild});
+          }
+          const removed = tracked.rows.get('tomorrow');
+          if (removed && !rows.some(function (row) { return row.key === 'tomorrow'; })) {
+            tracked.removedRow = removed;
+          }
+        });
+
+        window.reactFixture = {
+          setMode: setMode,
+          reconcileList: function () {
+            setRows([
+              {key: 'school', text: '今日は大学。'},
+              {key: 'added', text: '明日学校へ行く。'}
+            ]);
+          },
+          inspect: function () {
+            const post = document.getElementById('react-current');
+            const school = document.querySelector('[data-react-row="school"]');
+            const added = document.querySelector('[data-react-row="added"]');
+            const removed = tracked.removedRow;
+            return {
+              mode: mode,
+              postText: post.textContent,
+              postChildCount: post.childNodes.length,
+              postNodeIdentityPreserved: tracked.post === post.firstChild,
+              postNodeData: tracked.post ? tracked.post.data : null,
+              postNodeConnected: Boolean(tracked.post && tracked.post.isConnected),
+              postNodeParentPreserved: Boolean(tracked.post && tracked.post.parentNode === post),
+              schoolText: school ? school.textContent : null,
+              schoolNodeIdentityPreserved: Boolean(school && tracked.rows.get('school')
+                && tracked.rows.get('school').node === school.firstChild),
+              schoolElementIdentityPreserved: Boolean(school && tracked.rows.get('school')
+                && tracked.rows.get('school').element === school),
+              schoolNodeParentPreserved: Boolean(school && tracked.rows.get('school')
+                && tracked.rows.get('school').node.parentNode === school),
+              addedText: added ? added.textContent : null,
+              addedRenderedByReact: Boolean(added && added.firstChild
+                && added.firstChild.nodeType === Node.TEXT_NODE),
+              removedRowDisconnected: Boolean(removed && !removed.element.isConnected
+                && !removed.node.isConnected),
+              ownedAnnotationElements: document.querySelectorAll('[data-furihook-owned="1"]').length,
+              reactProduction: React.version === '18.3.1'
+            };
+          }
+        };
+
+        return h('div', {id: 'react-content'},
+          h('button', {id: 'react-toggle', type: 'button', onClick: function () {
+            setMode(function (current) {
+              return current === 'translation' ? 'original' : 'translation';
+            });
+          }}, mode === 'translation' ? '显示日语原文' : '显示中文译文'),
+          h('button', {id: 'react-list-update', type: 'button', onClick: function () {
+            setRows([
+              {key: 'school', text: '今日は大学。'},
+              {key: 'added', text: '明日学校へ行く。'}
+            ]);
+          }}, '更新 React 列表'),
+          h('p', {id: 'react-current', lang: mode === 'original' ? 'ja' : 'zh'}, source),
+          h('div', {id: 'react-list'}, rows.map(function (row) {
+            return h('p', {key: row.key, id: 'react-row-' + row.key,
+              'data-react-row': row.key}, row.text);
+          }))
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById('react-root')).render(h(ReactFixture));
+    })();
   </script>
 </body>
 </html>

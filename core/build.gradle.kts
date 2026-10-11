@@ -7,14 +7,15 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
-dependencies {
-    implementation("com.atilika.kuromoji:kuromoji-ipadic:0.9.0")
-    testImplementation("junit:junit:4.13.2")
-}
-
 val verification by sourceSets.creating {
     compileClasspath += sourceSets.main.get().output + configurations.runtimeClasspath.get()
     runtimeClasspath += output + compileClasspath
+}
+
+dependencies {
+    implementation("com.atilika.kuromoji:kuromoji-ipadic:0.9.0")
+    testImplementation("junit:junit:4.13.2")
+    "verificationImplementation"("com.google.code.gson:gson:2.14.0")
 }
 
 tasks.register<JavaExec>("verifyReadingCorpus") {
@@ -24,4 +25,17 @@ tasks.register<JavaExec>("verifyReadingCorpus") {
     classpath = verification.runtimeClasspath
     mainClass = "dev.furihook.engine.ReadingEngineCorpus"
     args(layout.buildDirectory.file("reports/reading-corpus.tsv").get().asFile.absolutePath)
+}
+
+tasks.register("writeReadingEngineBridgeClasspath") {
+    group = "verification"
+    description = "Writes the production reading engine verification classpath for browser E2E."
+    dependsOn(verification.classesTaskName)
+    val classpathFile = layout.buildDirectory.file("reports/webview-e2e/bridge-classpath.txt")
+    outputs.file(classpathFile)
+    doLast {
+        val output = classpathFile.get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(verification.runtimeClasspath.asPath + System.lineSeparator())
+    }
 }

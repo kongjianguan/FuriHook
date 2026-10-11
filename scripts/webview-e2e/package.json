@@ -1,0 +1,12 @@
+{
+  "name": "furihook-webview-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node ../webview-reconciliation-e2e.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1",
+    "pngjs": "7.0.0"
+  }
+}

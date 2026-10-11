@@ -35,8 +35,9 @@ def inspect_apk(apk, analyzer, output):
         if "assets/xposed_init" in archive.namelist():
             raise AssertionError("APK 包含旧版入口")
         web_script = archive.read("assets/furihook-web.js")
-        if not web_script or b"createElement(\"ruby\")" not in web_script:
-            raise AssertionError("APK 缺少 WebView Ruby 脚本")
+        source_script = pathlib.Path(__file__).resolve().parents[1] / "app/src/main/assets/furihook-web.js"
+        if not web_script or web_script != source_script.read_bytes():
+            raise AssertionError("APK 中的 WebView 脚本与项目源文件不一致")
         web_script_digest = hashlib.sha256(web_script).hexdigest()
         dictionary_bytes = 0
         for name in dictionary_files:

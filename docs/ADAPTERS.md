@@ -12,13 +12,27 @@
 
 内部类名与签名经过验证后才注册。内部名称被混淆、方法被移除或版本结构变化时，需要对真实宿主 APK 重新核实。测试应用使用真实 BasicText，无 LSPosed API 依赖；Java 通过已核实的 JVM 方法调用 Compose。
 
+### X 12.31
+
+用户提供的 `X_12.31.0-prod.01.apks` 包名为 `com.twitter.android`，版本号为 `312310001`，SHA-256 为 `03eb62077992827bb79fc2cec582db2734dc035b9bf9c6fffbfa456296ecf073`。`scripts/verify_x_apk.py` 使用 Androguard 检查实际 DEX，核实正文调用链 `com.x.urt.items.post.notepost.b.a → androidx.compose.material3.se.c → androidx.compose.foundation.text.e1.c → modifiers.v`，以及适配器使用的字段、构造器、测量、intrinsic 与布局失效方法描述符。
+
+`XComposeAdapter` 在实际的 `modifiers.y` 与 `modifiers.u` 节点测量期间建立上下文。段落构造器执行完成后，通过 Modern API 的 `getThisObject()` 获取实例，在独立 Spannable 中保留宿主样式并添加 RubySpan，同时创建新的平台测量缓存，再一起设置段落的 `h` 与 `i` 字段。原始 String、AnnotatedString 与语义数据保持原样；带有选择控制器的节点跳过处理。
+
+后台读音完成后，适配器核实节点的当前完整文本，再清除对应布局缓存并请求测量、绘制。intrinsic 测量先建立的纯文本缓存，在有界宽度测量后执行一次重建；文本版本变化会重新建立状态。注册前逐项检查实际类型和返回值，任何签名不匹配记录 `x_compose_unsupported`。
+
+静态检查输出明确区分 `staticContractVerified` 与 `runtimeHookVerified`。该安装包仅包含 arm64 原生库，现有 x86_64 专用模拟器尚未验证真实 X 页面中的注入、排版和交互。
+
 ## WebView
 
 Hook 公开导航方法与 WebViewClient 页面回调；不替换宿主 client。使用 `evaluateJavascript` 收集有界 DOM 文本批次，再将后台词典结果通过 JSON 返回页面，不提供 JavaScriptInterface。页面导航版本和节点原文检查防止应用旧结果。
 
-DOM 脚本用标准 `<ruby><rb>…</rb><rt>…</rt></ruby>` 处理文本节点，保持父元素与事件处理器。MutationObserver 收集后续变化，通过自有节点标记避免重复注音。输入框、可编辑区域、脚本、样式、已有 Ruby 排除；复制包含模块 Ruby 的选区时删除自有 rt。
+DOM 脚本保留宿主 TextNode 的身份、内容、父元素和兄弟关系。读音标签位于文档根元素下的独立元素及其 closed ShadowRoot 中，标签不接收触摸，不参与宿主正文的复制、选择和可访问性文本。React 等页面框架继续更新自己的原始节点。模块不改变正文的 HTML、业务文本或行高。
 
-长文本按代理对安全的 UTF-16 偏移逐段处理，每段最多 900 个 code unit。变更队列达到容量时重新扫描文档，后台队列拒绝的节点重新排队；替换当前遍历节点前移动 TreeWalker，保证继续遍历后续节点。单批最多 24 个文本项，JavaScript 待取批次最多 7 批。
+脚本使用 Range 获取原文字段的位置，使用当前字体测量读音，按实际视口、祖先裁剪区域、文本占用区域和遮挡情况决定是否绘制。读音占用的空间不足时跳过该词段。滚动、窗口尺寸、字体加载、页面可见性和相关属性变化触发位置刷新；旋转、斜切、透视与竖排文本跳过。注音层最多同时显示 128 个标签，正文范围与位置检查均有容量限制。
+
+语言判断使用最近的明确语言声明及所在段落的假名线索。明确声明日语的纯汉字段落可以分析；明确声明中文或韩文的段落排除；没有日语线索的纯汉字段落保持原文。输入框、可编辑区域、脚本、样式、已有 Ruby 和宿主 Shadow DOM 排除。MutationObserver 监听文本、子节点和影响排版的属性，结果应用前再次检查节点身份、原文及可编辑状态。
+
+长文本按代理对安全的 UTF-16 偏移逐段处理，每段最多 900 个 code unit。变更队列达到容量时重新扫描文档，后台队列拒绝的节点重新排队。单批最多 24 个文本项，JavaScript 待取批次最多 7 批，内存最多保存 4096 个文本片段。结果应用不会替换 TreeWalker 正在遍历的节点。
 
 当前范围为主文档，不进入 iframe 和 Shadow DOM。页面没有开启 JavaScript 时保持宿主设置。外部页面仍由宿主自己的网络访问机制加载；模块中的词典与文本处理不调用网络服务。
 

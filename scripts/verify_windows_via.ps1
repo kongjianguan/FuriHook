@@ -7,8 +7,20 @@ param(
 $ErrorActionPreference = 'Stop'
 $adb = Join-Path $Sdk 'platform-tools\adb.exe'
 $outputDirectory = Join-Path $Workspace 'results\via'
+$fixtureDirectory = Join-Path $Workspace 'host-compatibility'
 $url = 'http://127.0.0.1:18765/via-ruby.html'
 New-Item -ItemType Directory -Force $outputDirectory | Out-Null
+foreach ($fixture in @(
+    'via-ruby.html',
+    'vendor\react-18.3.1.production.min.js',
+    'vendor\react-dom-18.3.1.production.min.js',
+    'licenses\React-18.3.1-LICENSE.txt',
+    'licenses\ReactDOM-18.3.1-LICENSE.txt'
+)) {
+    if (-not (Test-Path (Join-Path $fixtureDirectory $fixture) -PathType Leaf)) {
+        throw "React/Via 验收文件缺失：$(Join-Path $fixtureDirectory $fixture)"
+    }
+}
 
 function Invoke-Device {
     param([string[]]$Arguments)
@@ -86,15 +98,23 @@ try {
         '-n', 'mark.via.gp/mark.via.Trampoline', '-d', $url)
     if (-not (($launch -join "`n").Contains('Status: ok'))) { throw 'Via 浏览器没有打开测试页面' }
 
-    $initial = Wait-PageReport 'initial' { param($report) $report.originalRubyMatch }
+    $initial = Wait-PageReport 'initial' { param($report) $report.originalRubyMatch -and $report.reactTranslationOnly }
     foreach ($pair in @('今日:きょう', '学校:がっこう', '日本語:にほんご', '勉強:べんきょう')) {
         if ($pair -notin $initial.Report.originalRubies) { throw "初始 Ruby 缺少范围：$pair" }
     }
     if ($initial.Report.originalText -ne '今日は学校で日本語を勉強します。' -or
+        -not $initial.Report.layoutIsClear -or $initial.Report.visibleOriginalAnnotationCount -eq 0 -or
         -not $initial.Report.inputAndEditableExcluded -or -not $initial.Report.inputValuePreserved -or
         -not $initial.Report.editableTextPreserved -or -not $initial.Report.existingRubyPreserved) {
         throw '输入框、可编辑区域或原有 Ruby 排除检查失败'
     }
+
+    Tap-VisibleText $initial.Document '显示日语原文'
+    $reactOriginal = Wait-PageReport 'react-original' { param($report) $report.reactOriginalUpdated }
+    Tap-VisibleText $reactOriginal.Document '显示中文译文'
+    $reactTranslation = Wait-PageReport 'react-translation' { param($report) $report.reactTranslationOnly }
+    Tap-VisibleText $reactTranslation.Document '更新 React 列表'
+    $reactList = Wait-PageReport 'react-list' { param($report) $report.reactListUpdated }
 
     Tap-VisibleText $initial.Document '生成动态 Ruby 注音'
     $updated = Wait-PageReport 'updated' { param($report) $report.updateRequested -and $report.updatedRubyMatch }
@@ -118,6 +138,10 @@ try {
     if ($applied.Count -eq 0) { throw 'Via WebView 没有记录实际 Ruby 注音应用事件' }
     if (@($events | Where-Object event -Match 'failed').Count -ne 0) { throw 'Via Hook 日志报告错误' }
     if (-not $linked.Report.originalRubyMatch -or -not $linked.Report.updatedRubyMatch -or
+        -not $linked.Report.layoutIsClear -or
+        -not $reactOriginal.Report.reactOriginalUpdated -or
+        -not $reactTranslation.Report.reactTranslationOnly -or
+        -not $reactList.Report.reactListUpdated -or
         -not $linked.Report.inputAndEditableExcluded -or -not $linked.Report.inputValuePreserved -or
         -not $linked.Report.editableTextPreserved -or -not $linked.Report.existingRubyPreserved -or
         $linked.Report.originalText -ne '今日は学校で日本語を勉強します。' -or
@@ -133,6 +157,15 @@ try {
         url = $url
         originalRubyPairs = $linked.Report.originalRubies
         updatedRubyPairs = $linked.Report.updatedRubies
+        reactTranslationNodePreserved = $reactTranslation.Report.react.postNodeIdentityPreserved
+        reactTranslationParentPreserved = $reactTranslation.Report.react.postNodeParentPreserved
+        reactTranslationTextUpdated = $reactTranslation.Report.react.postNodeData
+        reactOriginalRubyPairs = @($reactOriginal.Report.reactAnnotationPairs)
+        reactListNodePreserved = $reactList.Report.react.schoolNodeIdentityPreserved
+        reactListRemovedNodeDisconnected = $reactList.Report.react.removedRowDisconnected
+        reactListRubyPairs = @($reactList.Report.reactListAnnotationPairs)
+        reactProduction = $reactList.Report.react.reactProduction
+        rubyLayoutClear = $linked.Report.layoutIsClear
         linkClickCount = $linked.Report.linkClickCount
         inputAndEditableExcluded = $linked.Report.inputAndEditableExcluded
         existingRubyPreserved = $linked.Report.existingRubyPreserved

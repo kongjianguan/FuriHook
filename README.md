@@ -1,6 +1,6 @@
 # FuriHook
 
-Android 本地日语 Ruby 注音 LSPosed 模块，包名 `dev.furihook`，版本 0.3.0。支持 TextView、已核实的 Compose 文本布局入口与 WebView HTML Ruby，使用随 APK 分发的 Kuromoji IPADIC 词典。全部文本处理在宿主进程本地执行。
+Android 本地日语 Ruby 注音 LSPosed 模块，包名 `dev.furihook`，版本 0.4.0。支持 TextView、已核实的 Compose 文本布局入口与 WebView 页面注音，使用随 APK 分发的 Kuromoji IPADIC 词典。全部文本处理在宿主进程本地执行。
 
 ## 工具链
 
@@ -43,7 +43,8 @@ Android 本地日语 Ruby 注音 LSPosed 模块，包名 `dev.furihook`，版本
 - `KuromojiReadingEngine` 使用词语读音；片假名转换为平假名，完整汉字词保留整词注音，送假名在唯一匹配时分离。未知读音与歧义跳过。
 - `RubyTextRenderer` 添加真实 `ReplacementSpan`，测量注音宽度并扩展行高。原有 spans 保留；宿主 ReplacementSpan 冲突与词内样式边界跳过。超出内容区单行宽度的词段保留原文。
 - Compose 在包 ClassLoader 就绪时验证 Android 文本转换方法和两种 Foundation 文本节点的实际签名。后台分析完成后使节点的布局缓存失效，重新测量时在 Android Layout 创建前添加 RubySpan。Compose 的原始 AnnotatedString、文本范围和语义保持完整；可编辑文本没有进入这些只读节点的适配上下文。
-- WebView 注入本地 DOM 脚本，逐批读取文本节点，后台生成读音，再用 `<ruby><rb>原文</rb><rt>平假名</rt></ruby>` 替换匹配的文本节点。MutationObserver 处理动态页面，导航版本检查丢弃旧结果；父元素、链接与事件监听器保留。排除输入、contenteditable、脚本、样式和已有 Ruby；复制选区时移除模块自己的 rt。
+- X 12.31.0-prod.01（312310001）使用独立 Compose 适配器，反射名称及描述符取自用户提供的实际 APK。适配器处理该 APK 的 R8 文本节点和段落构造器，同步生成 styled 文本及其平台测量缓存。X 业务代码中的 Note Post 正文调用链已核实；运行验证需要能够安装该 arm64 安装包的设备。
+- WebView 注入本地 DOM 脚本，逐批读取文本节点并在后台生成读音。独立注音层保留宿主 TextNode 的身份、字符内容和节点关系，支持页面框架更新正文、切换原文与复用列表。读音标签不接收触摸，不参与正文复制和选择；导航及文本版本检查丢弃旧结果。语言声明和假名线索限定候选段落，输入、contenteditable、脚本、样式和已有 Ruby 排除。Range 位置、字体测量、裁剪、遮挡和相邻文本检查决定可显示的注音；空间不足的词段跳过，宿主行高保持原样。
 - 三种适配共享一个本地词典实例，后台分析串行使用词典。`ReadingEngine`、`RubySegment`、`RubyRenderer`、`RubyStyle` 保持独立。
 
 ## 性能与隐私
@@ -73,9 +74,11 @@ Debug 构建默认启用检测日志，可使用以下命令关闭；Release 构
   -Pandroid.testInstrumentationRunnerArguments.class=dev.furihook.testapp.MainActivityE2ETest,dev.furihook.testapp.RubyRendererE2ETest
 ```
 
-14 个普通 E2E 验证原有文本、重载、输入与生命周期，以及真实词典、RubySpan、TextView Layout、Canvas 像素位置、富文本样式、点击、选择、长读音、动态文本和 RecyclerView 复用。云端还安装并启动模块说明界面，通过 UI XML 检查名称、版本和阶段内容。Hook 专项测试只在已经启用模块的 Windows 设备执行，读取实际 TextView/Compose Layout 的 RubySpan 与 WebView DOM，校验范围、读音、动态更新与交互。
+14 个普通 E2E 验证原有文本、重载、输入与生命周期，以及真实词典、RubySpan、TextView Layout、Canvas 像素位置、富文本样式、点击、选择、长读音、动态文本和 RecyclerView 复用。云端还安装并启动模块说明界面，通过 UI XML 检查名称、版本和阶段内容。Hook 专项测试只在已经启用模块的 Windows 设备执行，读取实际 TextView/Compose Layout 的 RubySpan 与 WebView 注音层，校验范围、读音、动态更新与交互。
 
-Actions 保存 APK、JUnit XML/HTML、真实词典 TSV 语料报告、Lint、元数据与 SHA-256、模块界面 XML 和模拟器验证 JSON。这些产物支持重复执行与独立复查。
+云端的 Chromium 运行真实 React 18.3.1 和生产 Kuromoji 引擎，验证中文译文与日语原文切换、原始 TextNode 身份、列表更新、动态长文本、批量扫描、重载、缩放及裁剪，并检查实际绘制像素。浏览器使用测试依赖，生产模块不包含 React、Playwright 或 Gson。
+
+Actions 保存 APK、JUnit XML/HTML、真实词典 TSV 语料报告、Lint、元数据与 SHA-256、模块界面 XML、模拟器验证 JSON，以及浏览器节点、位置和像素证据。这些产物支持重复执行与独立复查。
 
 版本 0.3.0 的 [Actions 38037040758](https://github.com/kongjianguan/FuriHook/actions/runs/38037040758) 已通过：8 个核心测试、真实词典语料及 API 28/36 各 14 个 E2E。Windows API 35 的 Vector API 102 环境通过相同 14 个 E2E 和 3 个真实 Hook 测试，覆盖 TextView、WebView 与 Compose。实际 Via 7.3.3 页面的动态更新和链接交互通过验证；WebView 测试应用的原文复制通过验证；Compose 的固定行高、两个段落与窗口像素检查通过验证。APK 校验与设备证据见 [设备验证](docs/DEVICE_VALIDATION.md)。
 
@@ -110,7 +113,7 @@ pwsh -NoProfile -File scripts/test_windows_emulator.ps1
 1. 安装两个 Debug APK。
 2. 在支持 libxposed API 102 的 LSPosed 管理器中启用 FuriHook。
 3. 选择默认作用域 `dev.furihook.testapp`，终止并重新启动测试应用。
-4. 通过框架日志或 `adb logcat -s FuriHook:I` 检查 `module_loaded`、`hook_registered`、`text_observed` 和 `ruby_applied`。WebView 与 Compose 分别记录 `webview_ruby_applied`、`compose_ruby_applied`；Compose 签名不支持时记录 `compose_unsupported`。Vector v2.2 的 Modern API 日志写入 Logcat。
+4. 通过框架日志或 `adb logcat -s FuriHook:I` 检查 `module_loaded`、`hook_registered`、`text_observed` 和 `ruby_applied`。WebView 与 Compose 分别记录 `webview_ruby_applied`、`compose_ruby_applied`；Compose 签名不支持时记录 `compose_unsupported`。X 适配器记录 `x_compose_hooks_registered`、`x_compose_ruby_applied` 或 `x_compose_unsupported`。Vector v2.2 的 Modern API 日志写入 Logcat。
 5. 更新动态文本，滚动列表，点击富文本并选择文字，确认宿主显示与交互保持正常。密码与输入框不应产生文本观测。
 
 作用域通过 LSPosed 管理器选择，`staticScope=false` 允许选择其他普通应用。本阶段跳过系统应用。启用作用域或更新 APK 后需要重新启动目标进程；自动热重载关闭。
@@ -121,7 +124,9 @@ pwsh -NoProfile -File scripts/test_windows_emulator.ps1
 
 自定义 TextView 子类完全覆盖目标方法且不调用父类时，基类 Hook 无法处理更新。Editable、PrecomputedText、转换控件和自定义 Canvas 绘制跳过注音。字符数组调用只有现有 Spannable 缓冲支持原地注音；模块不改变该入口的原始参数。
 
-Compose 适配核实了 1.10.6 的内部类和 JVM 方法签名。宿主对这些内部类或方法执行混淆、移除，或使用不同签名时，日志报告 `compose_unsupported`；此时无法保证该宿主文本注音。X 12.31.0 的 APK 和实际页面尚未在测试设备验证。WebView 适配处理当前主文档，iframe、Shadow DOM、关闭 JavaScript 的页面和浏览器自定义内核需要独立验证；长文本节点按每段最多 900 UTF-16 code unit 分批分析，段落切分可能影响词语识别。
+通用 Compose 适配核实了 1.10.6 的内部类和 JVM 方法签名。宿主对这些内部类或方法执行混淆、移除，或使用不同签名时，日志报告 `compose_unsupported`。X 专用适配以 12.31.0 的实际 APK 为依据，签名不匹配时跳过注册；该安装包仅提供 arm64，当前 x86_64 模拟器无法执行真实 X 页面验收。启用了选择控制器的 X 文本节点跳过注音。
+
+WebView 适配处理当前主文档，iframe、宿主 Shadow DOM、关闭 JavaScript 的页面和浏览器自定义内核需要独立验证。读音在当前可视区域有空间时绘制；紧密行距、词段跨行、复杂变换及被遮挡的内容可能跳过注音。脚本不扩展宿主行高。长文本节点按每段最多 900 UTF-16 code unit 分批分析，段落切分可能影响词语识别。
 
 TextView 最多分析前 2048 UTF-16 code unit，`truncated` 明示该情况；Compose 跳过超过 2048 UTF-16 code unit 的段落。TextView 的视图状态或待处理集合达到 256 项上限时清理已有状态，后续文本更新重新建立状态。候选检测无法区分日语、中文、韩文中的 Han 字符；IPADIC 的歧义读音、专有名词和新词存在准确率限制。
 
