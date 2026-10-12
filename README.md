@@ -43,8 +43,8 @@ Android 本地日语 Ruby 注音 LSPosed 模块，包名 `dev.furihook`，版本
 - `KuromojiReadingEngine` 使用词语读音；片假名转换为平假名，完整汉字词保留整词注音，送假名在唯一匹配时分离。未知读音与歧义跳过。
 - `RubyTextRenderer` 添加真实 `ReplacementSpan`，测量注音宽度并扩展行高。原有 spans 保留；宿主 ReplacementSpan 冲突与词内样式边界跳过。超出内容区单行宽度的词段保留原文。
 - Compose 在包 ClassLoader 就绪时验证 Android 文本转换方法和两种 Foundation 文本节点的实际签名。后台分析完成后使节点的布局缓存失效，重新测量时在 Android Layout 创建前添加 RubySpan。Compose 的原始 AnnotatedString、文本范围和语义保持完整；可编辑文本没有进入这些只读节点的适配上下文。
-- X 12.31.0-prod.01（312310001）使用独立 Compose 适配器，反射名称及描述符取自用户提供的实际 APK。适配器处理该 APK 的 R8 文本节点和段落构造器，同步生成 styled 文本及其平台测量缓存。X 业务代码中的 Note Post 正文调用链已核实；运行验证需要能够安装该 arm64 安装包的设备。
-- WebView 使用本地 DOM 脚本逐批读取文本节点，并在后台生成读音。独立注音层保留宿主 TextNode 的身份、字符内容、父元素及兄弟节点关系、宽度和字距，支持页面框架更新正文、切换原文与复用列表。对于可安全自然增高的普通日文块，脚本测量正文 Range 和实际读音标签，在需要时为所在块设置自身的 `line-height` 与 `padding-top`。模块保存每项原有 inline 值与优先级，并记录无 `!important` 的自有声明；宿主直接改写已管理声明时，模块只撤销仍保持模块写入值的另一项，并以宿主新值重新测量。读音消失或模块释放时，只恢复仍由模块持有的声明。控件、交互区域、自身固定尺寸和复杂布局块不扩展空间；已有 overflow、祖先裁剪或祖先固定尺寸的区域保持原样，按实际 Range、裁剪、碰撞和遮挡结果决定注音。读音标签不接收触摸，不参与正文复制和选择；导航及文本版本检查丢弃旧结果。语言声明和假名线索限定候选段落，输入、contenteditable、脚本、样式和已有 Ruby 排除。
+- X 12.31.0-prod.01（312310001）使用独立 Compose 适配器，反射名称及描述符取自用户提供的实际 APK。适配器处理该 APK 的 R8 文本节点和段落构造器，同步生成 styled 文本及其平台测量缓存。在 Google APIs API 35 arm64-v8a 模拟器的 Vector API 102 实测中，X 主进程加载模块并注册 TextView、WebView 与 Compose Hook；四条 `x_compose_ruby_applied` 事件对应真实 Spannable 和 intrinsic 缓存写入。帖子正文、独立像素和 X WebView Ruby 尚未验证，详细证据见[设备验证](docs/DEVICE_VALIDATION.md)。
+- WebView 使用本地 DOM 脚本逐批读取文本节点，并在后台生成读音。读音标签位于文档根元素下的独立 closed ShadowRoot；宿主 TextNode 的身份、字符内容、父元素及兄弟节点关系、宽度和字距保持不变，页面框架可继续切换原文与译文、更新内容及复用列表。安全的普通日文流块按正文 Range 和实际读音标签测量结果，在需要时仅设置自身 `line-height` 与 `padding-top`；模块逐项保存 inline 原值与优先级，并跟踪自己的声明。宿主修改受管理的样式后，模块按宿主新值重新测量；读音消失或模块释放时，只恢复仍由模块持有的声明。链接等锚元素保持宿主 CSS，只在既有空间允许且实际 Range、裁剪、碰撞与遮挡检查通过时显示注音。输入控件、可编辑区域、自身固定尺寸、浮动与定位元素及复杂布局块跳过注音；已有 overflow、祖先裁剪或祖先固定尺寸不扩展空间。标签不接收触摸，不进入正文复制、选择和可访问性文本。每个页面最多保留 4096 个读音空间记录，视口最多绘制 128 个标签；导航及文本版本检查丢弃旧结果。语言声明和假名线索限定候选段落，输入、contenteditable、脚本、样式和已有 Ruby 排除。
 - 三种适配共享一个本地词典实例，后台分析串行使用词典。`ReadingEngine`、`RubySegment`、`RubyRenderer`、`RubyStyle` 保持独立。
 
 ## 性能与隐私
@@ -80,7 +80,7 @@ Debug 构建默认启用检测日志，可使用以下命令关闭；Release 构
 
 Actions 保存 APK、JUnit XML/HTML、真实词典 TSV 语料报告、Lint、元数据与 SHA-256、模块界面 XML、模拟器验证 JSON，以及浏览器节点、位置和像素证据。这些产物支持重复执行与独立复查。
 
-版本 0.3.0 的 [Actions 38037040758](https://github.com/kongjianguan/FuriHook/actions/runs/38037040758) 已通过：8 个核心测试、真实词典语料及 API 28/36 各 14 个 E2E。Windows API 35 的 Vector API 102 环境通过相同 14 个 E2E 和 3 个真实 Hook 测试，覆盖 TextView、WebView 与 Compose。实际 Via 7.3.3 页面的动态更新和链接交互通过验证；WebView 测试应用的原文复制通过验证；Compose 的固定行高、两个段落与窗口像素检查通过验证。APK 校验与设备证据见 [设备验证](docs/DEVICE_VALIDATION.md)。
+[最终云端验证](https://github.com/kongjianguan/FuriHook/actions/runs/38149087114) 对提交 `d5912ed666e88542bcb9d49a6630950cd6041e0e` 成功：8 个核心测试、真实词典语料、API 28/36 各 14 个 E2E 与 Modern API 102 APK 元数据检查均通过。Windows API 35 的 Vector 2.2/API 102 环境通过 14 个普通 E2E 和 3 个真实 Hook E2E；实际 Via 7.3.3 页面验证原文、更新、链接、列表与 Ruby 可见性。Apple M5 上的 Google APIs API 35 arm64-v8a 模拟器通过 X 12.31.0 的 Vector API 102 实际进程 Hook 核验，范围与限制见[设备验证](docs/DEVICE_VALIDATION.md)。
 
 本机构建需要 JDK 17 和 Android SDK 36；通过 `ANDROID_HOME` 或未跟踪的 `local.properties` 指定 SDK。
 
@@ -124,9 +124,9 @@ pwsh -NoProfile -File scripts/test_windows_emulator.ps1
 
 自定义 TextView 子类完全覆盖目标方法且不调用父类时，基类 Hook 无法处理更新。Editable、PrecomputedText、转换控件和自定义 Canvas 绘制跳过注音。字符数组调用只有现有 Spannable 缓冲支持原地注音；模块不改变该入口的原始参数。
 
-通用 Compose 适配核实了 1.10.6 的内部类和 JVM 方法签名。宿主对这些内部类或方法执行混淆、移除，或使用不同签名时，日志报告 `compose_unsupported`。X 专用适配以 12.31.0 的实际 APK 为依据，签名不匹配时跳过注册；该安装包仅提供 arm64，当前 x86_64 模拟器无法执行真实 X 页面验收。启用了选择控制器的 X 文本节点跳过注音。
+通用 Compose 适配核实了 1.10.6 的内部类和 JVM 方法签名。宿主对这些内部类或方法执行混淆、移除，或使用不同签名时，日志报告 `compose_unsupported`。X 专用适配以 12.31.0 的实际 APK 为依据，签名不匹配时跳过注册；X 的实际进程 Hook 已在 Google APIs API 35 arm64-v8a 模拟器通过验证。X 主界面的 Compose 文本已产生真实 RubySpan 写入事件；帖子正文、独立像素与 X WebView Ruby 尚未验证。启用了选择控制器的 X 文本节点跳过注音。
 
-WebView 适配处理当前主文档，iframe、宿主 Shadow DOM、关闭 JavaScript 的页面和浏览器自定义内核需要独立验证。普通静态流块仅在 Range 正文、真实读音标签和可视区域检查后，才会通过自身 `line-height` 与 `padding-top` 预留空间；模块逐项保存原 inline 值及优先级，并跟踪无 `!important` 的自有声明。宿主直接改写已管理声明时，模块以宿主新值重新测量；读音消失或模块释放时，只恢复仍由模块持有的声明。控件、交互区域、自身固定尺寸和复杂布局块不会扩展空间；已有 overflow 或祖先裁剪、固定尺寸的区域保持原布局，由 Range、裁剪、碰撞和遮挡检查决定能否显示注音。紧密行距且无法自然增高、词段跨行、复杂变换或被遮挡的内容可能跳过注音。长文本节点按每段最多 900 UTF-16 code unit 分批分析，段落切分可能影响词语识别。
+WebView 适配处理当前主文档，iframe、宿主 Shadow DOM、关闭 JavaScript 的页面和浏览器自定义内核需要独立验证。Ruby 位于独立 closed ShadowRoot。普通流块按 Range 正文和实际读音标签测量，必要时设置自身 `line-height` 与 `padding-top` 并保存、恢复自有 inline 声明；链接锚点保持 CSS，只使用已存在空间。控件、可编辑内容、固定尺寸、浮动或定位元素及复杂布局块排除；已有 overflow、祖先裁剪或祖先固定尺寸不扩展空间，由实际 Range、裁剪、碰撞和遮挡检查决定能否绘制。正文文本身份、宽度和字距不变；链接保留点击，Ruby 标签不影响正文复制、选择或可访问性文本。每个页面最多跟踪 4096 个空间记录并绘制 128 个可见标签；视口外已获得读音的记录保留，滚入视口后再绘制。紧密行距且无法自然增高、词段跨行、复杂变换或被遮挡的内容可能跳过注音。长文本节点按每段最多 900 UTF-16 code unit 分批分析，段落切分可能影响词语识别。
 
 TextView 最多分析前 2048 UTF-16 code unit，`truncated` 明示该情况；Compose 跳过超过 2048 UTF-16 code unit 的段落。TextView 的视图状态或待处理集合达到 256 项上限时清理已有状态，后续文本更新重新建立状态。候选检测无法区分日语、中文、韩文中的 Han 字符；IPADIC 的歧义读音、专有名词和新词存在准确率限制。
 

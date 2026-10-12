@@ -276,8 +276,9 @@ try {
 
     Scroll-TextIntoReadingViewport '明日は図書館へ行きます。' 'later' $rubyTopMarginPx | Out-Null
     $updatedVisible = Wait-PageReport 'updated-ruby-visible' {
-        param($report) $report.updateRequested -and $report.updatedRubyMatch
-            -and $report.visibleUpdatedAnnotationCount -gt 0
+        param($report)
+        ($report.updateRequested -and $report.updatedRubyMatch -and
+            $report.visibleUpdatedAnnotationCount -gt 0)
     }
     foreach ($pair in @('明日:あした', '図書館:としょかん', '行:い')) {
         if ($pair -notin $updatedVisible.Report.updatedRubies) { throw "更新文可视复验缺少范围：$pair" }
