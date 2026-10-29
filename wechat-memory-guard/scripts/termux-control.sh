@@ -24,7 +24,7 @@ case "$ACTION" in
     OWNER="$(su -c "stat -c '%u:%g' '$DIR/events.tsv'")"
     printf 'Requesting one manual purge on PID=%s (cached adj=%s).\n' "$PID" "$ADJ"
     # Create with the right uid/SELinux MCS label BEFORE atomic rename.
-    su -c "printf 'PURGE:$PID:WAKE\\n' > '$DIR/request.tmp.$PID' && chown '$OWNER' '$DIR/request.tmp.$PID' && $CHCON --reference='$DIR/events.tsv' '$DIR/request.tmp.$PID' && chmod 600 '$DIR/request.tmp.$PID' && mv '$DIR/request.tmp.$PID' '$DIR/request'"
+    su -c "printf 'PURGE:$PID:WAKE\n' > '$DIR/request.tmp.$PID' && chown '$OWNER' '$DIR/request.tmp.$PID' && $CHCON --reference='$DIR/events.tsv' '$DIR/request.tmp.$PID' && chmod 600 '$DIR/request.tmp.$PID' && mv '$DIR/request.tmp.$PID' '$DIR/request'"
     # Android 14+ freezes cached process threads. Wake only once to deliver
     # the already queued request. No sticky freezer or OOM setting changes.
     su -c "$AM unfreeze com.tencent.mm"
