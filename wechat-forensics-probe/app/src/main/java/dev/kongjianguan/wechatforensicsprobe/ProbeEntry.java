@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.Process;
+import android.provider.Settings;
 import android.util.Log;
 
 import java.util.Arrays;
@@ -18,11 +19,13 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
- * Strictly read-only WeChat 8.0.72 diagnostics-path event counter.
+ * WeChat 8.0.72 diagnostics-path observer with an OFF-by-default
+ * one-time optional XLog verbosity reduction (no per-log Hook).
  *
  * Not a clipboard, chat, contacts, network or file inspection tool.
- * All hooks are before-callbacks that NEVER modify a method argument or return.
- * Logging is aggregate label + count only, without argument inspection.
+ * Existing diagnostic hooks only count events, never inspect private data.
+ * If explicitly enabled, appenderOpen's integer severity is raised to ERROR.
+ * No chat, contacts, file, network payload, stack dump or account data is collected.
  */
 public final class ProbeEntry implements IXposedHookLoadPackage {
     private static final String TAG = "WXForensicProbe";
@@ -30,6 +33,7 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
     private static final long PINNED_VERSION_CODE = 3100L;
     private static final AtomicBoolean INSTALLED = new AtomicBoolean();
     private static final ConcurrentHashMap<String, AtomicLong> COUNTS = new ConcurrentHashMap<>();
+    private static volatile boolean XLOG_ERROR_ONLY;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam load) {
@@ -55,6 +59,8 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
                                             + " expected=" + PINNED_VERSION_CODE);
                                     return;
                                 }
+                                XLOG_ERROR_ONLY = Settings.Global.getInt(app.getContentResolver(),
+                                        "wfp_xlog_error_only", 0) == 1;
                                 install(app.getClassLoader(), processName);
                             } catch (Throwable error) {
                                 safeLog("ATTACH_FAILED " + error.getClass().getSimpleName());
@@ -68,7 +74,8 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
 
     private static void install(ClassLoader loader, String processName) {
         safeLog("READY pid=" + Process.myPid() + " process=" + processName
-                + " mode=observe_only");
+                + " xlog_error_only=" + XLOG_ERROR_ONLY);
+        hookXlogConfig(loader);
 
         // Native Mars IPxxLogic.uploadLog is deliberately NOT hooked:
         // the method is native and may run on latency-sensitive paths.
@@ -96,6 +103,43 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
 
         hook(loader, "com.tencent.mm.accessibility.core.AccInterceptActionReporter",
                 "realReport", "accessibility.intercept.count");
+    }
+
+    /**
+     * Intercepts only initialization, NOT logWrite or any per-event hot path.
+     * The Tencent Mars appender signature is pinned to WeChat 8.0.72/3100.
+     * Severity ERROR (4) retains ERROR and FATAL records, but reduces
+     * verbose, debug, info and warning log writes.
+     */
+    private static void hookXlogConfig(ClassLoader loader) {
+        try {
+            XposedHelpers.findAndHookMethod("com.tencent.mars.xlog.Xlog", loader,
+                    "appenderOpen", int.class, int.class, String.class,
+                    String.class, String.class, int.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            hit("xlog.appender.open");
+                            if (!XLOG_ERROR_ONLY) return;
+                            try {
+                                int originalLevel = (Integer) param.args[0];
+                                if (originalLevel < 4) {
+                                    param.args[0] = 4;
+                                    safeLog("XLOG_LEVEL_OVERRIDE original=" + originalLevel
+                                            + " new=4 pid=" + Process.myPid());
+                                } else {
+                                    safeLog("XLOG_LEVEL_PRESERVED original=" + originalLevel);
+                                }
+                            } catch (Throwable ignored) {
+                                safeLog("XLOG_LEVEL_OVERRIDE_FAILED");
+                            }
+                        }
+                    });
+            safeLog("HOOK_OK xlog.appender.open");
+        } catch (Throwable e) {
+            safeLog("HOOK_MISSING xlog.appender.open "
+                    + e.getClass().getSimpleName());
+        }
     }
 
     private static Class<?> findClass(ClassLoader loader, String name) {
