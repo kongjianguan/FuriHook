@@ -15,7 +15,7 @@ case "$ACTION" in
     [ "$(su -c "cat /proc/$PID/comm")" = 'com.tencent.mm' ] || { echo 'PID process identity changed' >&2; exit 1; }
     ADJ="$(su -c "cat /proc/$PID/oom_score_adj")"
     [ "$ADJ" -ge 400 ] || { echo "Refusing request: oom_adj=$ADJ" >&2; exit 1; }
-    TOP="$(su -c '/system/bin/dumpsys activity activities' 2>/dev/null | grep -m1 'topResumedActivity=' || true)"
+    TOP="$(su -c '/system/bin/dumpsys activity activities' 2>/dev/null | grep -E -m1 'topResumedActivity=|ResumedActivity:' || true)"
     [ -n "$TOP" ] || { echo 'Unable to confirm current foreground app' >&2; exit 1; }
     case "$TOP" in *com.tencent.mm*) echo 'Refusing request: WeChat visible' >&2; exit 1 ;; esac
     AUDIO="$(su -c '/system/bin/dumpsys audio' 2>/dev/null | grep -m1 'mAudioModeOwner: AudioModeInfo:' || true)"
