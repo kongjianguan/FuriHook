@@ -7,9 +7,9 @@
 
 - **构建**：仅使用 GitHub Actions + Android SDK/NDK，产物为 ARM64 LSPosed APK，含 `libwmgpurge.so`。
 - **注入**：兼容的 LSPosed Legacy API，`assets/xposed_init` 入口，代码严格检查包名与进程名都是 `com.tencent.mm`，绝不注入 `:push`、小程序及其他应用。
-- **监控**：加载时通过 `Application.attach` 注册 ActivityLifecycleCallbacks；唯一的探针线程每 5 秒检查私有的手动请求文件。没有请求时不遍历对象、没有循环内存扫描。
+- **监控**：加载时通过 `Application.attach` 注册 ActivityLifecycleCallbacks；唯一的探针线程每 5 秒检查私有的手动请求文件。**被冻结时线程不会执行**，控制器在提交请求后调用一次系统 `am unfreeze`，不禁用系统冻结器。没有请求时不遍历对象、没有循环内存扫描。
 - **手动 Purge**：Android Bionic `mallopt(M_PURGE, 0)`；仅尝试把已释放的分配器页归还内核，不调用 GC，不修改 Java 对象、Bitmap 或其他内存所有者。
-- **防误触发**：需要包含当前 PID 的一次性请求；必须满足全部条件：主进程无 Started Activity ≥120 秒、OOM Adj ≥400、音频模式为正常、当前 PID 尚未做过一次 Purge。
+- **防误触发**：需要包含当前 PID 的一次性请求；必须满足全部条件：主进程无 Started Activity ≥120 秒、外部提交前 OOM Adj ≥400 且当前前台不是微信、音频模式正常、当前 PID 尚未做过一次 Purge。OEM 系统在 `am unfreeze` 唤醒的瞬间可能暂时将 OOM Adj 设置为 0；仅对经过外部后台预检、显式标记为 `WAKE` 的请求，允许在没有 Started Activity 且后台已满 120 秒时通过该瞬时值，其余不低于 400 的条件不变。
 - **结果**：记录到微信自身私有目录 `files/wechat-memory-guard/events.tsv`，仅包括时间、PID、事件名、PSS 前后差值和耗时，不记录应用数据。
 - **保护**：如果检测失败则拒绝执行；在加载 JNI 失败时退化为只读监测；一个进程最多执行一次，不会定时自动回收。
 
@@ -30,7 +30,7 @@
    sh scripts/termux-control.sh cancel
    ```
 
-请求若在前台、期限不足、OOM Adj 过低或音频模式不合要求，立即拒绝并消费，不会潜伏在后台等待条件满足。
+请求若在前台、期限不足、OOM 优先级检查不通过或音频模式不合要求，立即拒绝并消费，不会潜伏在后台等待条件满足。`request` 文件使用微信 UID 和相同 SELinux MCS 标签，在原子重命名后立即临时解冻以便主进程消费请求；不会关闭系统缓存冻结器，也不会使用 sticky 解冻。
 
 ## 恢复
 
@@ -47,4 +47,4 @@
 
 ## 当前状态
 
-代码与 CI 尚需 GitHub Actions 实际编译验证。没有宣称已完成在微信主进程中的 Native Purge 测试。
+版本 0.2.0-manual-wake：修复一代控制器写入 root-only request 和 Android 后台冻结导致的请求无法执行；仍需在相同 PID 上完成原生 Purge 的首次实机验证。此前日志中的 `deny_oom_adj_0` 是首次临时解冻后的安全拒绝，不代表 Purge 已执行。

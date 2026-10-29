@@ -137,7 +137,11 @@ public final class ModuleEntry implements IXposedHookLoadPackage, IXposedHookZyg
 
         private void evaluate(String command) {
             int pid = Process.myPid();
-            if (!("PURGE:" + pid).equals(command)) {
+            // WAKE is a one-shot manual request made by a root-side controller
+            // that verifies the process was cached BEFORE ActivityManager unfreezes it.
+            // OEMs may transiently assign oom_adj=0 while waking a cached process.
+            boolean wakeRequest = ("PURGE:" + pid + ":WAKE").equals(command);
+            if (!wakeRequest && !("PURGE:" + pid).equals(command)) {
                 record("deny_invalid_pid_or_command", 0, 0);
                 return;
             }
@@ -155,10 +159,18 @@ public final class ModuleEntry implements IXposedHookLoadPackage, IXposedHookZyg
                 return;
             }
             int adj = oomAdj();
-            // Require clear Android background/cache priority; never touch a foreground call.
-            if (adj < 400) {
+            // Direct requests still require cached process priority.
+            // For a WAKE request, adj=0 is allowed ONLY if the stronger
+            // Activity-lifecycle check above proves no started Activity
+            // for >= 120 seconds. The external controller must have first
+            // verified adj>=400 and a different top-resumed package.
+            // Other low/unknown adj values fail closed.
+            if (adj < 400 && !(wakeRequest && adj == 0)) {
                 record("deny_oom_adj_" + adj, 0, elapsed);
                 return;
+            }
+            if (wakeRequest && adj == 0) {
+                record("wake_transient_adj_0", 0, elapsed);
             }
             AudioManager audio = (AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
             if (audio == null || audio.getMode() != AudioManager.MODE_NORMAL) {
