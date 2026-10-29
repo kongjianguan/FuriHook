@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.app.Application;
 import android.app.ActivityManager;
 import android.content.Context;
-import android.content.pm.ApplicationInfo;
 import android.media.AudioManager;
 import android.os.Bundle;
 import android.os.Process;
@@ -79,8 +78,10 @@ public final class ModuleEntry implements IXposedHookLoadPackage {
             }
             app.registerActivityLifecycleCallbacks(this);
             try {
-                ApplicationInfo info = app.getPackageManager().getApplicationInfo(MODULE, 0);
-                System.load(info.nativeLibraryDir + "/libwmgpurge.so");
+                // Resolve the JNI library through the LSPosed module class loader.
+                // Do not query the module package from inside WeChat: Android package
+                // visibility restrictions can raise NameNotFoundException.
+                System.loadLibrary("wmgpurge");
                 nativeAvailable = true;
                 record("ready_native", 0, 0);
             } catch (Throwable error) {
