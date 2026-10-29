@@ -43,3 +43,20 @@ For the exact matching `JobInfo.getService().getClassName()`, `JobScheduler.sche
 Reversion: `settings delete global ctp_block_drs_upload` (and the corresponding other flags), disable the module, reload the target process. The flags are read only at process start and default to OFF if unavailable.
 
 Before testing on production, run each flag for a bounded period with an external watchdog that restores the flag and restarts the corresponding process on errors. Monitor for retry storms and core-process restarts. Do not enable all flags at once.
+
+
+## Version 0.3: stop Metis clipboard telemetry at its production source
+
+Static analysis of ColorOS Metis `com.oplus.metis` found:
+`UserDataCollectionUtilManager.onClipboardTextReport(Context, clipboardText, ...)` →
+`toBase64Twice` → static-key `AES128EncryptionHelper.encrypt` →
+`onCommonWithClipboard` → `OplusTrack.onCommon` → DRS.
+The local DRS database contained 193 decryptable clipboard events; 193 were fully decoded locally to content, including 84 URL-prefix and 78 non-ASCII samples. **No clipboard plaintext, AES key, tokens, account identifiers or payload values were printed or stored outside the original database.**
+
+The exact Metis reporter (a void method) has a standalone opt-in, default **OFF**:
+`settings put global ctp_block_metis_clipboard 1`; reload `com.oplus.metis`.
+When active, its method body is skipped and returns void; clipboard APIs, copying and pasting are not altered. No clipboard contents are inspected or logged by the hook.
+
+Rollback: `settings delete global ctp_block_metis_clipboard`, then restart Metis; or disable the LSPosed module and restart Metis. Only scope Metis main process, never Android System, system_server, SystemUI or clipboard core.
+
+This only blocks that one reporting function; it does not guarantee other Metis or OS clipboard telemetry paths are absent. Preserve any existing records until separately authorized for deletion.
