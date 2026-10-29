@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="ColorOS Telemetry Probe (Observe)"
+        android:allowBackup="false"
+        android:description="@string/description">
+        <meta-data android:name="xposedmodule" android:value="true"/>
+        <meta-data android:name="xposeddescription" android:value="仅记录 OLC/DRS 上报调度次数，不采集内容，不修改系统行为"/>
+        <meta-data android:name="xposedminversion" android:value="93"/>
+    </application>
+</manifest>
