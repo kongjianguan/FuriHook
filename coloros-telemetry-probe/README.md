@@ -26,3 +26,20 @@ Compare CPU, PSS, error frequency, socket counts, JobScheduler pending history w
 Rollback: disable this module in LSPosed and reload affected processes; if framework fails, disable module from KernelSU. Existing WeChatMemoryGuard is independent.
 
 Guardrail: no changes to OLC or DRS packages, no cancelling queued jobs, no firewall changes, no revocation of permissions. Future narrow blocking should be introduced one edge at a time only after observed call patterns justify it.
+
+
+## Version 0.2.0: exact-service suppression pilot (default OFF)
+
+This version remains observe-only until *all* targeted flags are explicitly set to 1 by a root administrator and the affected process is reloaded. Independent switches:
+
+- `settings put global ctp_block_drs_upload 1`: suppress only `com.oplus.drs.core.schduler.UploadJobService`.
+- `settings put global ctp_block_olc_dcs 1`: suppress only OLC `UploadJobService` and `RetryLogUploadJobService`.
+- `settings put global ctp_block_olc_crashbox 1`: suppress only OLC `CrashBoxJobService` (not part of the first pilot).
+
+For the exact matching `JobInfo.getService().getClassName()`, `JobScheduler.schedule` returns `RESULT_SUCCESS` without queueing the job. For already scheduled matching `JobService.onStartJob`, the hook returns `false` immediately without invoking uploader code. All other jobs, services, receivers and Binder interfaces are unchanged.
+
+**Does not guarantee zero telemetry:** direct HTTP uploads, events sent via provider/Binder, other OEM components and previously running workers remain outside this interception.
+
+Reversion: `settings delete global ctp_block_drs_upload` (and the corresponding other flags), disable the module, reload the target process. The flags are read only at process start and default to OFF if unavailable.
+
+Before testing on production, run each flag for a bounded period with an external watchdog that restores the flag and restarts the corresponding process on errors. Monitor for retry storms and core-process restarts. Do not enable all flags at once.
