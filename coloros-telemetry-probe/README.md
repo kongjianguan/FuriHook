@@ -60,3 +60,18 @@ When active, its method body is skipped and returns void; clipboard APIs, copyin
 Rollback: `settings delete global ctp_block_metis_clipboard`, then restart Metis; or disable the LSPosed module and restart Metis. Only scope Metis main process, never Android System, system_server, SystemUI or clipboard core.
 
 This only blocks that one reporting function; it does not guarantee other Metis or OS clipboard telemetry paths are absent. Preserve any existing records until separately authorized for deletion.
+
+
+## 0.3.1 Metis subprocess coverage and behavior-level verification
+
+During 2026-10-29, DRS still showed `event_clipboard_text` events after the 0.3.0 main-process Hook was enabled. Vector module logs show Metis UID 10118 spawned short-lived subprocesses (e.g. PIDs 5574, 12092) exactly around 17:32 and 17:36, and the module was loaded in them, but 0.3.0 deliberately skipped any process name other than `com.oplus.metis`. **An installed/enabled Hook is not proof that an event is suppressed across all processes.**
+
+0.3.1 limits by package `com.oplus.metis` but now covers *all* its process names. It hooks the exact void method `onClipboardTextReport()`, plus a precise fallback at `onCommonWithClipboard(Context, String eventId, HashMap)` when `eventId.equals("event_clipboard_text")`. No clipboard content is read or logged. The root-controlled opt-in flag `ctp_block_metis_clipboard` remains OFF by default on new installations; previous explicitly enabled setting persists on upgrade.
+
+Post-update checks:
+1. Vector active, scope still contains only OLC/DRS/Metis, and `ctp_block_metis_clipboard=1`.
+2. On every new Metis process, `READY`, `HOOK_OK metis.clipboard.report`, `HOOK_OK metis.clipboard.downstream` are expected. A missing hook is a fail-open condition, not a silent success.
+3. **Behavioral verification**: a DRS read-only query on latest `event_clipboard_text` timestamp. No new events should be created after an appropriately tested clipboard action; historical records are not removed. Stop/review if new event appears.
+4. Package APK SHA256 and versionCode may change after Play Store/App Market/OTA updates; compare against pinned baseline, review class/method signatures and run the CI build + a bounded on-device pilot before re-enabling a changed hook.
+5. Reboot: Android settings and package enabled states usually persist, and Vector scope is stored on `/data`, but successful injection must be independently verified each boot. The old LSPosed KSU module has a disable marker intentionally; actual active hook framework is **JingMatrix Vector v2.2** plus Zygisk Next. Do not enable the old LSPosed module.
+
