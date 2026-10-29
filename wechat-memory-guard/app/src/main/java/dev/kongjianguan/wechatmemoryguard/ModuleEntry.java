@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
@@ -25,10 +26,17 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 // Experimental: one process, one manual purge maximum; no automatic memory reclamation.
 // Never hook message, network, database, contacts, media contents, or authentication code.
-public final class ModuleEntry implements IXposedHookLoadPackage {
+public final class ModuleEntry implements IXposedHookLoadPackage, IXposedHookZygoteInit {
     private static final String TARGET = "com.tencent.mm";
     private static final String MODULE = "dev.kongjianguan.wechatmemoryguard";
     private static final AtomicBoolean INSTALLED = new AtomicBoolean();
+    private static volatile String moduleApkPath;
+
+    @Override
+    public void initZygote(StartupParam startupParam) {
+        moduleApkPath = startupParam.modulePath;
+    }
+
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam load) {
@@ -78,10 +86,18 @@ public final class ModuleEntry implements IXposedHookLoadPackage {
             }
             app.registerActivityLifecycleCallbacks(this);
             try {
-                // Resolve the JNI library through the LSPosed module class loader.
-                // Do not query the module package from inside WeChat: Android package
-                // visibility restrictions can raise NameNotFoundException.
-                System.loadLibrary("wmgpurge");
+                // Legacy LSPosed classloaders may not expose JNI library directories.
+                try {
+                    System.loadLibrary("wmgpurge");
+                } catch (UnsatisfiedLinkError ignored) {
+                    if (moduleApkPath == null || moduleApkPath.isEmpty()) {
+                        record("native_failed_missing_module_path", 0, 0);
+                        return;
+                    }
+                    // Android's linker supports uncompressed, page-aligned .so
+                    // entries in APKs with this !/lib/ ABI path.
+                    System.load(moduleApkPath + "!/lib/arm64-v8a/libwmgpurge.so");
+                }
                 nativeAvailable = true;
                 record("ready_native", 0, 0);
             } catch (Throwable error) {
