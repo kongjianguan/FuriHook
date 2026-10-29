@@ -49,6 +49,8 @@ jobs:
           apk=wechat-memory-guard/app/build/outputs/apk/debug/app-debug.apk
           test -s "$apk"
           unzip -l "$apk" | grep 'lib/arm64-v8a/libwmgpurge.so'
+          unzip -v "$apk" | awk '/lib\/arm64-v8a\/libwmgpurge\.so/ { found=1; if ($2 != "Stored") exit 2 } END { if (!found) exit 3 }'
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 "$apk"
           test "$(unzip -p "$apk" assets/xposed_init)" = 'dev.kongjianguan.wechatmemoryguard.ModuleEntry'
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" | grep "package: name='dev.kongjianguan.wechatmemoryguard'"
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions "$apk" | tee /tmp/wmg-permissions.txt
