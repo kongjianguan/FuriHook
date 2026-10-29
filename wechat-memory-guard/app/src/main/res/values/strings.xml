@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_description">微信主进程内存实验探针，手动触发，无自动清理</string>
+</resources>
