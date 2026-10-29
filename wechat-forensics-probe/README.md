@@ -42,3 +42,20 @@ su -c 'settings put global wfp_xlog_error_only 1'
 ```
 
 Disable **for the next process launch**: `su -c 'settings delete global wfp_xlog_error_only'`, followed by a controlled WeChat reload. If no `EVENT xlog.appender.open` and `XLOG_LEVEL_OVERRIDE` appears after restart, do NOT claim active suppression. Do not reinstall or tamper with log files. Verify connection/notifications, process survival, crash count, `/proc/<pid>/io`, XLog increments and repeated native initialization. Preserve all normal business data and never block security/anti-abuse telemetry as part of this logging experiment.
+
+
+## v0.2.2 lean XLog policy (2026-10-30)
+
+Production optimization is opt-in at the device setting `wfp_xlog_error_only=1`; default remains OFF when newly installed. The installed device is currently using this flag.
+
+The module is version-pinned to WeChat `8.0.72 / versionCode 3100`. During `Application.attach()` **before** callback, it hooks the *single* Mars `Xlog.appenderOpen(int,int,String,String,String,int)` initialization call, raising the log-level argument from INFO=2 to ERROR=4. It preserves ERROR/FATAL and all actual upload/crash functionality. No per-log-method callback, no file write denial, no fake upload success.
+
+XLog initialization is targeted for the main, push, tools, and `:appbrand*` processes only. For `:appbrand*`, **no upload observer hooks are installed**. In the main/push/tools processes, the previous seven read-only lifecycle observers are now **OFF by default**. Enable them for diagnostics only by setting `settings global wfp_observe_uploads=1` and reloading a test WeChat process; ordinary optimized operation leaves this flag unset/null.
+
+On-device two-logger runtime validation gave:
+`XLOG_EARLY_READY enabled=true`;
+`XLOG_LEVEL_OVERRIDE original=2 new=4` for main and push;
+`READY ... observe_uploads=false` with both alive and no related crash-buffer events.
+The appbrand variant is built but **not yet behaviorally verified**, and no CPU/battery saving percentage has been proven.
+
+Rollback command: `su -c 'sh /data/data/com.termux/files/home/.local/share/wechat-forensics-lab/xlog-level-control.sh restore'`. This restores the saved original flag and reloads WeChat. No historical logs, chats, media, login state or security/antifraud APIs are modified. After updating WeChat, require a new method-signature review and experimental test before claiming continued effectiveness.
