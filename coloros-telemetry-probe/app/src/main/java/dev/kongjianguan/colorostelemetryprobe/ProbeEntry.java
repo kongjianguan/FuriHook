@@ -20,7 +20,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 /**
  * Strictly read-only telemetry lifecycle probe.
  * No method interception changes results, args, app data, network traffic or scheduling.
- * Scope: OLC and DRS main processes only. Never system_server or SystemUI.
+ * Scope: OLC/DRS main processes; all Metis package subprocesses. Never system_server or SystemUI.
  */
 public final class ProbeEntry implements IXposedHookLoadPackage {
     private static final String TAG = "COTProbe";
@@ -41,7 +41,7 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam load) {
         if (!(OLC.equals(load.packageName) && OLC.equals(load.processName))
                 && !(DRS.equals(load.packageName) && DRS.equals(load.processName))
-                && !(METIS.equals(load.packageName) && METIS.equals(load.processName))) {
+                && !METIS.equals(load.packageName)) {
             return;
         }
         try {
@@ -52,7 +52,7 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
                             if (!INSTALLED.compareAndSet(false, true)) return;
                             try {
                                 Application app = (Application) param.thisObject;
-                                attachProbe(app, load.processName);
+                                attachProbe(app, load.packageName, load.processName);
                             } catch (Throwable e) {
                                 safeLog("attach_failed " + e.getClass().getSimpleName());
                             }
@@ -63,7 +63,7 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
         }
     }
 
-    private static void attachProbe(Application app, String processName) {
+    private static void attachProbe(Application app, String packageName, String processName) {
         // Read only a purpose-specific configuration flag. Unknown or malformed => observe-only.
         try {
             BLOCK_DRS = DRS.equals(processName) &&
@@ -74,7 +74,7 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
                     Settings.Global.getInt(app.getContentResolver(), "ctp_block_olc_crashbox", 0) == 1;
             DROP_DRS_EVENT_WRITES = DRS.equals(processName) &&
                     Settings.Global.getInt(app.getContentResolver(), "ctp_drop_drs_event_writes", 0) == 1;
-            BLOCK_METIS_CLIPBOARD = METIS.equals(processName) &&
+            BLOCK_METIS_CLIPBOARD = METIS.equals(packageName) &&
                     Settings.Global.getInt(app.getContentResolver(), "ctp_block_metis_clipboard", 0) == 1;
         } catch (Throwable e) {
             BLOCK_DRS = BLOCK_OLC_DCS = BLOCK_OLC_CRASHBOX = DROP_DRS_EVENT_WRITES =
@@ -88,7 +88,7 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
                 " drs_drop_event_writes=" + DROP_DRS_EVENT_WRITES +
                 " metis_clipboard_block=" + BLOCK_METIS_CLIPBOARD);
         final ClassLoader loader = app.getClassLoader();
-        if (METIS.equals(processName)) {
+        if (METIS.equals(packageName)) {
             hookMetisClipboard(loader);
             // No generic jobs, Binder or database hooks in the Metis process.
             return;
@@ -200,6 +200,28 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
             safeLog("HOOK_OK metis.clipboard.report");
         } catch (Throwable e) {
             safeLog("HOOK_MISSING metis.clipboard.report " + e.getClass().getSimpleName());
+        }
+        // Backstop for any direct callers that bypass onClipboardTextReport().
+        // Only event_clipboard_text is suppressed; all other onCommonWithClipboard events pass through.
+        try {
+            XposedHelpers.findAndHookMethod(
+                    "com.oplus.textintent.common.utils.UserDataCollectionUtilManager",
+                    loader, "onCommonWithClipboard", Context.class, String.class,
+                    java.util.HashMap.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam p) {
+                            if (BLOCK_METIS_CLIPBOARD
+                                    && "event_clipboard_text".equals(p.args[1])) {
+                                hit("metis.clipboard.downstream.suppressed");
+                                p.setResult(null); // void method: no OplusTrack call.
+                            }
+                        }
+                    });
+            safeLog("HOOK_OK metis.clipboard.downstream");
+        } catch (Throwable e) {
+            safeLog("HOOK_MISSING metis.clipboard.downstream "
+                    + e.getClass().getSimpleName());
         }
     }
 
