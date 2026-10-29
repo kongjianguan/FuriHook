@@ -40,10 +40,11 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam load) {
         if (!TARGET.equals(load.packageName)) return;
         final String processName = load.processName;
-        if (!(TARGET.equals(processName) || (TARGET + ":push").equals(processName)
-                || (TARGET + ":tools").equals(processName))) {
-            return;
-        }
+        final boolean coreProcess = TARGET.equals(processName)
+                || (TARGET + ":push").equals(processName)
+                || (TARGET + ":tools").equals(processName);
+        final boolean appBrandProcess = processName.startsWith(TARGET + ":appbrand");
+        if (!coreProcess && !appBrandProcess) return;
 
         try {
             XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class,
@@ -94,7 +95,12 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
                                     XLOG_ERROR_ONLY = false; // Fail open, keep observation working.
                                     safeLog("XLOG_FLAG_UNAVAILABLE");
                                 }
-                                install(app.getClassLoader(), processName);
+                                if (coreProcess) {
+                                    install(app.getClassLoader(), processName);
+                                } else {
+                                    safeLog("READY process=" + processName
+                                            + " mode=xlog_init_only enabled=" + XLOG_ERROR_ONLY);
+                                }
                             } catch (Throwable error) {
                                 safeLog("ATTACH_FAILED " + error.getClass().getSimpleName());
                             }
