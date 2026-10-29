@@ -5,7 +5,7 @@
         android:description="@string/app_description"
         android:allowBackup="false"
         android:hasCode="true"
-        android:extractNativeLibs="true">
+        android:extractNativeLibs="false">
         <meta-data android:name="xposedmodule" android:value="true"/>
         <meta-data android:name="xposeddescription" android:value="只读监控和手动 Native Heap Purge 实验"/>
         <meta-data android:name="xposedminversion" android:value="93"/>
