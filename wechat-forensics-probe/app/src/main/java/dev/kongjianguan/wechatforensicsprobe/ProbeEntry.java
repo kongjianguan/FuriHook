@@ -23,7 +23,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * one-time optional XLog verbosity reduction (no per-log Hook).
  *
  * Not a clipboard, chat, contacts, network or file inspection tool.
- * Existing diagnostic hooks only count events, never inspect private data.
+ * Existing diagnostic event-counter hooks are OFF by default in lean mode,
+ * enabled only by the independent wfp_observe_uploads=1 debug flag.
  * If explicitly enabled, appenderOpen's integer severity is raised to ERROR.
  * No chat, contacts, file, network payload, stack dump or account data is collected.
  */
@@ -35,6 +36,7 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
     private static final AtomicBoolean EARLY_XLOG_INSTALLED = new AtomicBoolean();
     private static final ConcurrentHashMap<String, AtomicLong> COUNTS = new ConcurrentHashMap<>();
     private static volatile boolean XLOG_ERROR_ONLY;
+    private static volatile boolean OBSERVE_UPLOADS;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam load) {
@@ -96,6 +98,13 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
                                     safeLog("XLOG_FLAG_UNAVAILABLE");
                                 }
                                 if (coreProcess) {
+                                    try {
+                                        OBSERVE_UPLOADS = Settings.Global.getInt(
+                                                app.getContentResolver(),
+                                                "wfp_observe_uploads", 0) == 1;
+                                    } catch (Throwable ignored) {
+                                        OBSERVE_UPLOADS = false;
+                                    }
                                     install(app.getClassLoader(), processName);
                                 } else {
                                     safeLog("READY process=" + processName
@@ -113,7 +122,9 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
 
     private static void install(ClassLoader loader, String processName) {
         safeLog("READY pid=" + Process.myPid() + " process=" + processName
-                + " xlog_error_only=" + XLOG_ERROR_ONLY);
+                + " xlog_error_only=" + XLOG_ERROR_ONLY
+                + " observe_uploads=" + OBSERVE_UPLOADS);
+        if (!OBSERVE_UPLOADS) return; // Lean production mode: no upload-path observer hooks.
 
         // Native Mars IPxxLogic.uploadLog is deliberately NOT hooked:
         // the method is native and may run on latency-sensitive paths.
