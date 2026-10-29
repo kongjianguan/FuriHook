@@ -8,8 +8,8 @@ android {
         applicationId 'dev.kongjianguan.wechatforensicsprobe'
         minSdk 28
         targetSdk 34
-        versionCode 3
-        versionName '0.2.1-xlog-appbrand'
+        versionCode 4
+        versionName '0.2.2-lean-xlog'
     }
     buildTypes {
         debug { minifyEnabled false }
