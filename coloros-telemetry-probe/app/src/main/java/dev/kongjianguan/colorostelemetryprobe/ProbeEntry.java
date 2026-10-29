@@ -32,6 +32,8 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
     private static volatile boolean BLOCK_DRS;
     private static volatile boolean BLOCK_OLC_DCS;
     private static volatile boolean BLOCK_OLC_CRASHBOX;
+    private static volatile boolean DROP_DRS_EVENT_WRITES;
+    private static final AtomicLong FAKE_ROW_ID = new AtomicLong(1_000_000_000L);
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam load) {
@@ -67,14 +69,17 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
                     Settings.Global.getInt(app.getContentResolver(), "ctp_block_olc_dcs", 0) == 1;
             BLOCK_OLC_CRASHBOX = OLC.equals(processName) &&
                     Settings.Global.getInt(app.getContentResolver(), "ctp_block_olc_crashbox", 0) == 1;
+            DROP_DRS_EVENT_WRITES = DRS.equals(processName) &&
+                    Settings.Global.getInt(app.getContentResolver(), "ctp_drop_drs_event_writes", 0) == 1;
         } catch (Throwable e) {
-            BLOCK_DRS = BLOCK_OLC_DCS = BLOCK_OLC_CRASHBOX = false;
+            BLOCK_DRS = BLOCK_OLC_DCS = BLOCK_OLC_CRASHBOX = DROP_DRS_EVENT_WRITES = false;
             safeLog("settings_unavailable " + e.getClass().getSimpleName());
         }
         safeLog("READY process=" + processName + " pid=" + Process.myPid() +
                 " drs_block=" + BLOCK_DRS +
                 " olc_dcs_block=" + BLOCK_OLC_DCS +
-                " olc_crashbox_block=" + BLOCK_OLC_CRASHBOX);
+                " olc_crashbox_block=" + BLOCK_OLC_CRASHBOX +
+                " drs_drop_event_writes=" + DROP_DRS_EVENT_WRITES);
         final ClassLoader loader = app.getClassLoader();
         if (OLC.equals(processName)) {
             hookJob(loader, "com.oplus.olc.dcs.service.UploadJobService", "olc.dcs");
@@ -86,6 +91,12 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
         if (DRS.equals(processName)) {
             hookJob(loader, "com.oplus.drs.core.schduler.UploadJobService", "drs.upload");
             hookService(loader, "com.oplus.drs.core.component.DrsChannelService", "drs.channel");
+            hookDao(loader, "com.oplus.drs.core.db.dao.impl.CommonNrDaoImpl",
+                    "com.oplus.drs.core.db.entity.CommonRecord", "drs.db.nr");
+            hookDao(loader, "com.oplus.drs.core.db.dao.impl.CommonRtDaoImpl",
+                    "com.oplus.drs.core.db.entity.CommonRecord", "drs.db.rt");
+            hookDao(loader, "com.oplus.drs.core.db.dao.impl.EventLogDaoImpl",
+                    "com.oplus.drs.core.db.entity.EventLogRecord", "drs.db.event");
         }
         try {
             JobScheduler scheduler = (JobScheduler) app.getSystemService(Context.JOB_SCHEDULER_SERVICE);
@@ -184,6 +195,43 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
             safeLog("HOOK_OK " + label + ".start");
         } catch (Throwable e) {
             safeLog("HOOK_MISSING " + label + ".start " + e.getClass().getSimpleName());
+        }
+    }
+
+    /** Only known telemetry DAO insert/insertBatch methods; never reads record values. */
+    private static void hookDao(ClassLoader loader, String name, String recordClass, String label) {
+        try {
+            Class<?> record = XposedHelpers.findClass(recordClass, loader);
+            XposedHelpers.findAndHookMethod(name, loader, "insert", record, new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    hit(label + ".insert");
+                    if (DROP_DRS_EVENT_WRITES) {
+                        hit(label + ".insert.suppressed");
+                        // Some call sites expect a positive SQLite rowid; never report -1.
+                        p.setResult(FAKE_ROW_ID.getAndIncrement());
+                    }
+                }
+            });
+            safeLog("HOOK_OK " + label + ".insert");
+        } catch (Throwable e) {
+            safeLog("HOOK_MISSING " + label + ".insert " + e.getClass().getSimpleName());
+        }
+        try {
+            XposedHelpers.findAndHookMethod(name, loader, "insertBatch", java.util.List.class,
+                    new XC_MethodHook() {
+                        @Override protected void beforeHookedMethod(MethodHookParam p) {
+                            hit(label + ".batch");
+                            if (DROP_DRS_EVENT_WRITES) {
+                                hit(label + ".batch.suppressed");
+                                int n = p.args[0] instanceof java.util.List
+                                        ? ((java.util.List<?>) p.args[0]).size() : 0;
+                                p.setResult(n);
+                            }
+                        }
+                    });
+            safeLog("HOOK_OK " + label + ".batch");
+        } catch (Throwable e) {
+            safeLog("HOOK_MISSING " + label + ".batch " + e.getClass().getSimpleName());
         }
     }
 
