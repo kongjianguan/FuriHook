@@ -32,6 +32,7 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
     private static final String TARGET = "com.tencent.mm";
     private static final long PINNED_VERSION_CODE = 3100L;
     private static final AtomicBoolean INSTALLED = new AtomicBoolean();
+    private static final AtomicBoolean EARLY_XLOG_INSTALLED = new AtomicBoolean();
     private static final ConcurrentHashMap<String, AtomicLong> COUNTS = new ConcurrentHashMap<>();
     private static volatile boolean XLOG_ERROR_ONLY;
 
@@ -47,6 +48,33 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
         try {
             XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class,
                     new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            // WeChat may initialize XLog during attachBaseContext().
+                            // Install the one-time level hook BEFORE Application.attach().
+                            if (!EARLY_XLOG_INSTALLED.compareAndSet(false, true)) return;
+                            try {
+                                Context base = (Context) param.args[0];
+                                long version = base.getPackageManager()
+                                        .getPackageInfo(TARGET, 0).getLongVersionCode();
+                                if (version != PINNED_VERSION_CODE) {
+                                    safeLog("XLOG_VERSION_MISMATCH");
+                                    return;
+                                }
+                                try {
+                                    XLOG_ERROR_ONLY = Settings.Global.getInt(
+                                            base.getContentResolver(), "wfp_xlog_error_only", 0) == 1;
+                                } catch (Throwable configError) {
+                                    XLOG_ERROR_ONLY = false;
+                                    safeLog("XLOG_FLAG_UNAVAILABLE");
+                                }
+                                hookXlogConfig(base.getClassLoader());
+                                safeLog("XLOG_EARLY_READY enabled=" + XLOG_ERROR_ONLY);
+                            } catch (Throwable e) {
+                                safeLog("XLOG_EARLY_INIT_FAILED "
+                                        + e.getClass().getSimpleName());
+                            }
+                        }
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             if (!INSTALLED.compareAndSet(false, true)) return;
@@ -80,7 +108,6 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
     private static void install(ClassLoader loader, String processName) {
         safeLog("READY pid=" + Process.myPid() + " process=" + processName
                 + " xlog_error_only=" + XLOG_ERROR_ONLY);
-        hookXlogConfig(loader);
 
         // Native Mars IPxxLogic.uploadLog is deliberately NOT hooked:
         // the method is native and may run on latency-sensitive paths.
