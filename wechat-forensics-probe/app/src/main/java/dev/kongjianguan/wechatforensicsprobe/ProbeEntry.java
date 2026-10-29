@@ -59,8 +59,13 @@ public final class ProbeEntry implements IXposedHookLoadPackage {
                                             + " expected=" + PINNED_VERSION_CODE);
                                     return;
                                 }
-                                XLOG_ERROR_ONLY = Settings.Global.getInt(app.getContentResolver(),
-                                        "wfp_xlog_error_only", 0) == 1;
+                                try {
+                                    XLOG_ERROR_ONLY = Settings.Global.getInt(
+                                            app.getContentResolver(), "wfp_xlog_error_only", 0) == 1;
+                                } catch (Throwable configError) {
+                                    XLOG_ERROR_ONLY = false; // Fail open, keep observation working.
+                                    safeLog("XLOG_FLAG_UNAVAILABLE");
+                                }
                                 install(app.getClassLoader(), processName);
                             } catch (Throwable error) {
                                 safeLog("ATTACH_FAILED " + error.getClass().getSimpleName());
