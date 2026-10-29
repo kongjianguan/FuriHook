@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
         android:label="WeChatMemoryGuard (实验)"
-        android:description="微信主进程内存实验探针，手动触发，无自动清理"
+        android:description="@string/app_description"
         android:allowBackup="false"
         android:hasCode="true"
         android:extractNativeLibs="true">
