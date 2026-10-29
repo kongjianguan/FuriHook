@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="WeChatMemoryGuard (实验)"
+        android:description="微信主进程内存实验探针，手动触发，无自动清理"
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:extractNativeLibs="true">
+        <meta-data android:name="xposedmodule" android:value="true"/>
+        <meta-data android:name="xposeddescription" android:value="只读监控和手动 Native Heap Purge 实验"/>
+        <meta-data android:name="xposedminversion" android:value="93"/>
+    </application>
+</manifest>
